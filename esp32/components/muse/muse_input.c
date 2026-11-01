@@ -40,6 +40,7 @@
 #include "muse_link.h"
 #include "muse_mem.h"
 #include "muse_menu.h"
+#include "muse_page.h"
 #include "muse_settings.h"
 #include "muse_state.h"
 #include "muse_ui.h"
@@ -744,7 +745,12 @@ static bool console_command(char *line, bool whole)
         return true;
     }
     if (!strcmp(line, "ui=settings") || !strcmp(line, "ui=face")) {
-        muse_ui_bench_page(!strcmp(line, "ui=settings"));
+        /* MUSE_PAGES_MAX + 1 is past the last tile, so it lands on settings. */
+        muse_ui_bench_page(!strcmp(line, "ui=settings") ? MUSE_PAGES_MAX + 1 : 0);
+        return true;
+    }
+    if (!strncmp(line, "ui=", 3) && line[3] >= '0' && line[3] <= '9' && !line[4]) {
+        muse_ui_bench_page(line[3] - '0');
         return true;
     }
 #endif
