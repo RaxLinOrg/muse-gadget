@@ -1,0 +1,58 @@
+menu "Muse clock page"
+
+config MUSE_CLOCK_ENABLED
+    bool "Clock and weather page"
+    default y
+    help
+        Adds a swipe page between the character and settings showing the
+        time, the date and a three-day forecast. Turning this off leaves the
+        page out of the tileview entirely, so settings stays one swipe from
+        the character.
+
+config MUSE_CLOCK_LATITUDE
+    string "Latitude"
+    default "25.0330"
+    depends on MUSE_CLOCK_ENABLED
+    help
+        Decimal degrees, north positive. The default is Taipei. The forecast
+        comes from Open-Meteo, which needs no account and no API key, and the
+        clock takes its timezone from the same answer, so this is the only
+        place your location is configured.
+
+config MUSE_CLOCK_LONGITUDE
+    string "Longitude"
+    default "121.5654"
+    depends on MUSE_CLOCK_ENABLED
+    help
+        Decimal degrees, east positive. The default is Taipei.
+
+config MUSE_CLOCK_PLACE
+    string "Place name"
+    default "Taipei"
+    depends on MUSE_CLOCK_ENABLED
+    help
+        Shown along the bottom of the page, beside the time of the last
+        forecast. Cosmetic: nothing is looked up from it.
+
+config MUSE_CLOCK_FAHRENHEIT
+    bool "Fahrenheit"
+    default n
+    depends on MUSE_CLOCK_ENABLED
+    help
+        Ask Open-Meteo for Fahrenheit instead of Celsius.
+
+config MUSE_CLOCK_24H
+    bool "24-hour clock"
+    default y
+    depends on MUSE_CLOCK_ENABLED
+    help
+        Off shows a 12-hour time with AM or PM beside it.
+
+config MUSE_CLOCK_NTP_SERVER
+    string "NTP server"
+    default "pool.ntp.org"
+    depends on MUSE_CLOCK_ENABLED
+    help
+        Where the time comes from, once Wi-Fi is up.
+
+endmenu

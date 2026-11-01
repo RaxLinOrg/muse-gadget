@@ -39,6 +39,7 @@
 #include "muse_link.h"
 #include "muse_mem.h"
 #include "muse_menu.h"
+#include "muse_page.h"
 #include "muse_pixel.h"
 #include "muse_settings.h"
 #include "muse_settings_ui.h"
@@ -101,6 +102,44 @@ static lv_obj_t *s_tv;
 static volatile bool s_face_active = true;
 static lv_obj_t *s_face;
 
+/* The face, the pages a component registered, then settings: the tileview's
+ * order, left to right. s_tile_page is NULL for the two the UI owns itself. */
+#define TILES_MAX (MUSE_PAGES_MAX + 2)
+static const muse_page_t *s_reg[MUSE_PAGES_MAX];
+static int s_reg_n;
+static bool s_reg_full;         /* dropped one; warn once the log is up */
+static lv_obj_t *s_tile_obj[TILES_MAX];
+static const muse_page_t *s_tile_page[TILES_MAX];
+static int s_tile_n;
+
+/* From a constructor: no locks, no logging, no allocation. */
+void muse_page_register(const muse_page_t *page)
+{
+    if (!page || !page->build) {
+        return;
+    }
+    if (s_reg_n >= MUSE_PAGES_MAX) {
+        s_reg_full = true;
+        return;
+    }
+    s_reg[s_reg_n++] = page;
+}
+
+/* Which tile is showing, as an index into s_tile_obj. */
+static int active_tile(void)
+{
+    if (!s_tv) {
+        return 0;
+    }
+    const lv_obj_t *act = lv_tileview_get_tile_active(s_tv);
+    for (int i = 0; i < s_tile_n; i++) {
+        if (s_tile_obj[i] == act) {
+            return i;
+        }
+    }
+    return 0;
+}
+
 static void tile_changed_cb(lv_event_t *e)
 {
     lv_obj_t *tv = lv_event_get_target(e);
@@ -113,7 +152,7 @@ bool muse_ui_face_active(void)
     return s_face_active;
 }
 static lv_obj_t *s_settings;
-static lv_obj_t *s_dots[2];
+static lv_obj_t *s_dots[TILES_MAX];
 static lv_obj_t *s_wifi_icon;
 static lv_obj_t *s_ble_icon;
 static lv_obj_t *s_cover;
@@ -899,7 +938,30 @@ static void build_screen(void)
          * shows as a different-coloured square around the character. */
         lv_obj_set_style_bg_color(s_face, lv_color_black(), 0);
         lv_obj_set_style_bg_opa(s_face, LV_OPA_COVER, 0);
-        s_settings = lv_tileview_add_tile(s_tv, 1, 0, LV_DIR_LEFT);
+        s_tile_obj[0] = s_face;
+        s_tile_n = 1;
+        /* The registered pages, in between. A page that reports itself off
+         * gets no tile at all, so it costs nothing to swipe past. */
+        for (int i = 0; i < s_reg_n; i++) {
+            const muse_page_t *p = s_reg[i];
+            if (p->enabled && !p->enabled()) {
+                continue;
+            }
+            lv_obj_t *t = lv_tileview_add_tile(s_tv, s_tile_n, 0, LV_DIR_LEFT | LV_DIR_RIGHT);
+            lv_obj_set_scrollbar_mode(t, LV_SCROLLBAR_MODE_OFF);
+            lv_obj_set_style_bg_color(t, lv_color_black(), 0);
+            lv_obj_set_style_bg_opa(t, LV_OPA_COVER, 0);
+            s_tile_obj[s_tile_n] = t;
+            s_tile_page[s_tile_n] = p;
+            s_tile_n++;
+            ESP_LOGI(TAG, "page %d: %s", s_tile_n - 1, p->name ? p->name : "?");
+        }
+        if (s_reg_full) {
+            ESP_LOGW(TAG, "more than %d pages registered; the rest were dropped", MUSE_PAGES_MAX);
+        }
+        s_settings = lv_tileview_add_tile(s_tv, s_tile_n, 0, LV_DIR_LEFT);
+        s_tile_obj[s_tile_n] = s_settings;
+        s_tile_n++;
         lv_obj_add_event_cb(s_tv, tile_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
         face = s_face;
     }
@@ -1173,8 +1235,8 @@ static void build_overlays(void)
 {
     lv_obj_t *scr = lv_screen_active();
 
-    /* Page dots. */
-    for (int i = 0; i < 2 && s_tv; i++) {
+    /* Page dots, one per tile, centred as a row along the bottom edge. */
+    for (int i = 0; i < s_tile_n && s_tv; i++) {
         lv_obj_t *d = lv_obj_create(scr);
         lv_obj_remove_style_all(d);
         lv_obj_set_size(d, 8, 8);
@@ -1182,7 +1244,7 @@ static void build_overlays(void)
         lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(d, lv_color_hex(COLOR_DOT_OFF), 0);
         lv_obj_remove_flag(d, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_align(d, LV_ALIGN_BOTTOM_MID, i ? 8 : -8, -14);
+        lv_obj_align(d, LV_ALIGN_BOTTOM_MID, (i * 2 - (s_tile_n - 1)) * 8, -14);
         s_dots[i] = d;
     }
 
@@ -1352,21 +1414,29 @@ static void update_chrome(float now)
     s_next_settings_tick = now + SETTINGS_TICK_S;
 
     if (s_tv) {
-        int page = lv_tileview_get_tile_active(s_tv) == s_settings;
+        int page = active_tile();
+        bool settings_page = s_tile_obj[page] == s_settings;
         bool subpage = muse_settings_ui_in_subpage();
-        bool swipe = !page || !subpage;
+        bool swipe = !settings_page || !subpage;
         if (swipe != lv_obj_has_flag(s_tv, LV_OBJ_FLAG_SCROLLABLE)) {
             lv_obj_set_flag(s_tv, LV_OBJ_FLAG_SCROLLABLE, swipe);
         }
         int shown = page * 2 + subpage;
         if (shown != s_shown_page) {
-            for (int i = 0; i < 2; i++) {
+            for (int i = 0; i < s_tile_n; i++) {
                 lv_obj_set_style_bg_color(s_dots[i], lv_color_hex(i == page ? COLOR_ACCENT : COLOR_DOT_OFF), 0);
-                lv_obj_set_flag(s_dots[i], LV_OBJ_FLAG_HIDDEN, page && subpage);
+                lv_obj_set_flag(s_dots[i], LV_OBJ_FLAG_HIDDEN, settings_page && subpage);
             }
             s_shown_page = shown;
         }
-        muse_settings_ui_tick(lv_obj_get_scroll_x(s_tv) > 0);
+        /* Settings polls while it is even partly on screen; the same rule
+         * decides it now that there may be tiles in front of it. */
+        muse_settings_ui_tick(lv_obj_get_scroll_x(s_tv) > (s_tile_n - 2) * s_w);
+        for (int i = 0; i < s_tile_n; i++) {
+            if (s_tile_page[i] && s_tile_page[i]->tick) {
+                s_tile_page[i]->tick(i == page);
+            }
+        }
     }
 
     /* Joining, the icon blinks: the compact layout has no state label. */
@@ -1629,9 +1699,9 @@ static void update_status(muse_mode_t mode, float now)
 static volatile bool s_snapshot;
 #if LV_USE_SNAPSHOT
 static volatile int s_bench_page = -1;
-void muse_ui_bench_page(bool settings)
+void muse_ui_bench_page(int index)
 {
-    s_bench_page = settings ? 1 : 0;   /* applied in the LVGL task */
+    s_bench_page = index;   /* applied in the LVGL task */
 }
 #endif
 
@@ -1682,9 +1752,9 @@ static void frame_tick(lv_timer_t *timer)
 {
 #if LV_USE_SNAPSHOT
     if (s_bench_page >= 0) {
-        bool settings = s_bench_page != 0;
+        int want = s_bench_page < s_tile_n ? s_bench_page : s_tile_n - 1;
         s_bench_page = -1;
-        if (s_tv) lv_tileview_set_tile(s_tv, settings ? s_settings : s_face, LV_ANIM_OFF);
+        if (s_tv) lv_tileview_set_tile(s_tv, s_tile_obj[want], LV_ANIM_OFF);
     }
 #endif
     update_control_hints(muse_state_mode(NULL));
@@ -1797,6 +1867,12 @@ esp_err_t muse_ui_start(void)
         muse_settings_ui_build(s_settings);
     } else {
         muse_menu_build(lv_screen_active(), s_w, s_h);
+    }
+    /* The registered pages, each onto the empty tile it was given. */
+    for (int i = 0; i < s_tile_n; i++) {
+        if (s_tile_page[i]) {
+            s_tile_page[i]->build(s_tile_obj[i]);
+        }
     }
     build_overlays();
     lv_timer_create(frame_tick, muse_board->frame_ms, NULL);
