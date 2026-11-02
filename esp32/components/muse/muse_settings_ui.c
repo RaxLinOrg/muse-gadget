@@ -36,6 +36,7 @@
 #include "muse_input.h"
 #include "muse_keypad.h"
 #include "muse_link.h"
+#include "muse_page.h"
 #include "muse_settings.h"
 #include "muse_state.h"
 #include "muse_text.h"
@@ -78,6 +79,22 @@ typedef struct {
     lv_obj_t **obj;
     void (*build)(lv_obj_t *tile);
 } page_t;
+
+/* A settings page belonging to a registered swipe page (muse_page.h): the
+ * same lazy build and free as the firmware's own, one slot each. */
+static lv_obj_t *s_plug_obj[MUSE_PAGES_MAX];
+static lv_obj_t *s_plug_val[MUSE_PAGES_MAX];
+static page_t s_plug_nav[MUSE_PAGES_MAX];
+static const muse_page_t *s_plug[MUSE_PAGES_MAX];
+static int s_plug_n;
+
+/*
+ * Where muse_settings_ui_page() files the page it just made. A plugin's
+ * settings_build only gets a tile and returns nothing, so this is how the
+ * page it builds finds its way back into the slot on_nav then shows. Set
+ * only for the length of one build.
+ */
+static lv_obj_t **s_building;
 
 /* Home values. */
 static lv_obj_t *s_home_wifi, *s_home_hatch, *s_home_ble, *s_home_sound, *s_home_sleep, *s_home_battery, *s_about;
@@ -447,6 +464,12 @@ static void drop(lv_obj_t *p)
             *pages[i] = NULL;
         }
     }
+    for (int i = 0; i < s_plug_n; i++) {
+        if (s_plug_obj[i] == p) {
+            s_plug_obj[i] = NULL;
+            s_plug_val[i] = NULL;   /* its row's value label went with the page */
+        }
+    }
     lv_obj_delete_async(p);   /* we may be in one of its own events */
 }
 
@@ -489,7 +512,12 @@ static void on_nav(lv_event_t *e)
 {
     const page_t *page = lv_event_get_user_data(e);
     if (!*page->obj) {
+        s_building = page->obj;
         page->build(s_tile);
+        s_building = NULL;
+    }
+    if (!*page->obj) {
+        return;   /* the build made no page; better to stay put than to crash */
     }
     show(*page->obj);
     muse_settings_ui_tick(true);   /* fill it in now, not at the next tick */
@@ -1435,6 +1463,28 @@ static void build_power_page(lv_obj_t *tile)
     note(list, text);
 }
 
+/* ---------- for a swipe page's own settings (muse_page.h) ---------- */
+
+lv_obj_t *muse_settings_ui_page(lv_obj_t *tile, const char *title, lv_obj_t **list_out)
+{
+    lv_obj_t *p = page(tile, title, true, list_out);
+    if (s_building) {
+        *s_building = p;
+    }
+    return p;
+}
+
+lv_obj_t *muse_settings_ui_row(lv_obj_t *list, const char *icon, const char *text,
+                               lv_obj_t **value_out, lv_event_cb_t cb, void *user)
+{
+    return row(list, icon, text, value_out, cb, user);
+}
+
+void muse_settings_ui_note(lv_obj_t *list, const char *text)
+{
+    note(list, text);
+}
+
 /* ---------- Home ---------- */
 
 static const page_t WIFI = { &s_wifi, build_wifi_page };
@@ -1469,6 +1519,21 @@ static void build_home(lv_obj_t *tile)
         row(list, LV_SYMBOL_VIDEO, "Phone camera", &s_home_camera, on_camera, NULL);
     }
 #endif
+
+    /* Then whatever the registered swipe pages brought with them. */
+    s_plug_n = 0;
+    for (int i = 0; i < muse_page_count() && s_plug_n < MUSE_PAGES_MAX; i++) {
+        const muse_page_t *mp = muse_page_get(i);
+        if (!mp || !mp->settings_title || !mp->settings_build) {
+            continue;
+        }
+        int n = s_plug_n++;
+        s_plug[n] = mp;
+        s_plug_obj[n] = NULL;
+        s_plug_nav[n] = (page_t){ &s_plug_obj[n], mp->settings_build };
+        row(list, mp->settings_icon, mp->settings_title,
+            mp->settings_value ? &s_plug_val[n] : NULL, on_nav, &s_plug_nav[n]);
+    }
     if (muse_board->power_off) {
         row(list, LV_SYMBOL_POWER, "Power off", NULL, on_nav, (void *)&POWER);
     }
@@ -1477,6 +1542,15 @@ static void build_home(lv_obj_t *tile)
 
 static void tick_home(void)
 {
+    for (int i = 0; i < s_plug_n; i++) {
+        if (s_plug_val[i] && s_plug[i]->settings_value) {
+            char buf[32];
+            buf[0] = '\0';
+            s_plug[i]->settings_value(buf, sizeof(buf));
+            set_text(s_plug_val[i], buf);
+        }
+    }
+
     muse_wifi_status_t w;
     muse_wifi_status(&w);
     static const char *const WIFI_VALUES[] = { "Off", "Not set", "Joining", "", "Failed", "Not nearby" };
@@ -1562,3 +1636,25 @@ bool muse_settings_ui_in_subpage(void)
 {
     return s_current != s_home;
 }
+
+#if LV_USE_SNAPSHOT
+/* Open the nth plugin row's page, for screenshots. Same path as a tap, so it
+ * is worth no more than the tap it stands in for. LVGL task only. */
+void muse_settings_ui_bench_plug(int i)
+{
+    if (!s_home || i < 0 || i >= s_plug_n) {
+        return;
+    }
+    const page_t *page = &s_plug_nav[i];
+    if (!*page->obj) {
+        s_building = page->obj;
+        page->build(s_tile);
+        s_building = NULL;
+    }
+    if (!*page->obj) {
+        return;
+    }
+    show(*page->obj);
+    muse_settings_ui_tick(true);
+}
+#endif

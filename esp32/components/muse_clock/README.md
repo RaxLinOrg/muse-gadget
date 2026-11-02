@@ -23,17 +23,25 @@ somewhere else and point the build at it:
 idf.py -DEXTRA_COMPONENT_DIRS=/path/to/muse_clock build
 ```
 
-Then set where you are. Everything is under **Muse clock page** in
-`idf.py menuconfig`, or straight into your board's overlay in
+Then pick a city. The page adds a **Weather** row to settings with a list of
+cities to choose from — San Jose, San Francisco, Los Angeles, Seattle,
+New York, Taipei, Kaohsiung, Tokyo, Singapore, London, and one of your own.
+The choice is kept in NVS, so it survives a reboot, and the clock follows the
+chosen city's timezone with nothing else to set.
+
+The last entry in that list is whatever you put in `idf.py menuconfig` under
+**Muse clock page**, or straight into your board's overlay in
 `esp32/devices/`:
 
 ```
-CONFIG_MUSE_CLOCK_LATITUDE="25.0330"
-CONFIG_MUSE_CLOCK_LONGITUDE="121.5654"
-CONFIG_MUSE_CLOCK_PLACE="Taipei"
+CONFIG_MUSE_CLOCK_LATITUDE="37.3382"
+CONFIG_MUSE_CLOCK_LONGITUDE="-121.8863"
+CONFIG_MUSE_CLOCK_PLACE="Custom"
 CONFIG_MUSE_CLOCK_FAHRENHEIT=n
 CONFIG_MUSE_CLOCK_24H=y
 ```
+
+To change the built-in list, edit `muse_clock_cities.h`.
 
 `CONFIG_MUSE_CLOCK_ENABLED=n` leaves the page out of the build entirely, and
 settings goes back to being one swipe from the character.

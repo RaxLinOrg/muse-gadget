@@ -125,6 +125,18 @@ void muse_page_register(const muse_page_t *page)
     s_reg[s_reg_n++] = page;
 }
 
+/* The pages that got a tile, in tileview order. */
+int muse_page_count(void)
+{
+    /* The face and settings are the UI's own; the rest are registered. */
+    return s_tile_n > 2 ? s_tile_n - 2 : 0;
+}
+
+const muse_page_t *muse_page_get(int i)
+{
+    return i >= 0 && i < muse_page_count() ? s_tile_page[i + 1] : NULL;
+}
+
 /* Which tile is showing, as an index into s_tile_obj. */
 static int active_tile(void)
 {
@@ -1703,6 +1715,13 @@ void muse_ui_bench_page(int index)
 {
     s_bench_page = index;   /* applied in the LVGL task */
 }
+
+static volatile int s_bench_sub = -1;
+
+void muse_ui_bench_sub(int index)
+{
+    s_bench_sub = index;
+}
 #endif
 
 /* Streams the screen over the USB cable as base64 RGB565 (bench testing; needs
@@ -1755,6 +1774,13 @@ static void frame_tick(lv_timer_t *timer)
         int want = s_bench_page < s_tile_n ? s_bench_page : s_tile_n - 1;
         s_bench_page = -1;
         if (s_tv) lv_tileview_set_tile(s_tv, s_tile_obj[want], LV_ANIM_OFF);
+    }
+    if (s_bench_sub >= 0) {
+        /* Settings has to be the tile on screen and built, so send >ui=settings
+         * first and give it a frame. */
+        int want = s_bench_sub;
+        s_bench_sub = -1;
+        muse_settings_ui_bench_plug(want);
     }
 #endif
     update_control_hints(muse_state_mode(NULL));

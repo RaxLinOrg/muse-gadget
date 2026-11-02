@@ -27,8 +27,10 @@
 #include "sdkconfig.h"
 
 #include "muse_board.h"
+#include "muse_clock_cities.h"
 #include "muse_clock_icons.h"
 #include "muse_page.h"
+#include "muse_settings_ui.h"
 #include "muse_weather.h"
 #include "muse_wifi.h"
 
@@ -278,7 +280,7 @@ static void build(lv_obj_t *tile)
 
     /* Nothing else starts these: the page owns its clock and its forecast. */
     muse_weather_start();
-    ESP_LOGI(TAG, "page built for %s", CONFIG_MUSE_CLOCK_PLACE);
+    ESP_LOGI(TAG, "page built for %s", muse_clock_city_name());
 }
 
 /* ------------------------------------------------------------------ tick */
@@ -340,6 +342,64 @@ static void show_clock(void)
     }
 }
 
+/* ------------------------------------------------------- settings page */
+
+/* Cleared when the page is freed, which happens on the way back. */
+static lv_obj_t *s_city_check[MUSE_CITY_COUNT];
+
+static void on_city_page_deleted(lv_event_t *e)
+{
+    (void)e;
+    memset(s_city_check, 0, sizeof(s_city_check));
+}
+
+static void mark_city(void)
+{
+    int chosen = muse_clock_city();
+    for (int i = 0; i < MUSE_CITY_COUNT; i++) {
+        if (s_city_check[i]) {
+            lv_label_set_text(s_city_check[i], i == chosen ? LV_SYMBOL_OK : "");
+        }
+    }
+}
+
+static void on_city(lv_event_t *e)
+{
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    muse_clock_set_city(i);
+    /* The new place is in another timezone, so the old offset is wrong until
+     * its forecast lands. Showing nothing beats showing the wrong hour. */
+    s_offset = INT32_MIN;
+    s_shown_valid = false;
+    s_shown_time[0] = '\0';
+    s_shown_date[0] = '\0';
+    mark_city();
+}
+
+static void build_settings(lv_obj_t *tile)
+{
+    lv_obj_t *list;
+    lv_obj_t *p = muse_settings_ui_page(tile, "WEATHER", &list);
+    lv_obj_add_event_cb(p, on_city_page_deleted, LV_EVENT_DELETE, NULL);
+    for (int i = 0; i < MUSE_CITY_COUNT; i++) {
+        muse_settings_ui_row(list, NULL, MUSE_CITIES[i].name, &s_city_check[i],
+                             on_city, (void *)(intptr_t)i);
+        lv_obj_set_style_text_color(s_city_check[i], lv_color_hex(COLOR_ACCENT), 0);
+    }
+    muse_settings_ui_note(list,
+                          "The clock follows the city: its timezone comes back "
+                          "with the forecast. The last entry is the one from "
+                          "menuconfig.");
+    mark_city();
+}
+
+static void settings_value(char *out, size_t cap)
+{
+    snprintf(out, cap, "%s", muse_clock_city_name());
+}
+
+/* ------------------------------------------------------------ weather */
+
 static void show_weather(void)
 {
     muse_weather_t w;
@@ -371,10 +431,10 @@ static void show_weather(void)
     if (s_foot) {
         struct tm tm;
         if (local_now(&tm)) {
-            snprintf(buf, sizeof(buf), "%s %02d:%02d", CONFIG_MUSE_CLOCK_PLACE,
+            snprintf(buf, sizeof(buf), "%s %02d:%02d", muse_clock_city_name(),
                      tm.tm_hour, tm.tm_min);
         } else {
-            snprintf(buf, sizeof(buf), "%s", CONFIG_MUSE_CLOCK_PLACE);
+            snprintf(buf, sizeof(buf), "%s", muse_clock_city_name());
         }
         lv_label_set_text(s_foot, buf);
     }
@@ -428,5 +488,9 @@ static const muse_page_t clock_page = {
     .name = "clock",
     .build = build,
     .tick = tick,
+    .settings_title = "Weather",
+    .settings_icon = LV_SYMBOL_GPS,
+    .settings_build = build_settings,
+    .settings_value = settings_value,
 };
 MUSE_PAGE(clock_page);

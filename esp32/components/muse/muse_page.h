@@ -61,6 +61,22 @@ typedef struct {
     /* Checked once, before the tile is made: false leaves the page out of the
      * tileview entirely rather than hiding an empty tile. May be NULL. */
     bool (*enabled)(void);
+
+    /*
+     * An optional page of the page's own in settings, listed under the rows
+     * the firmware owns. settings_title turns it on; without it the other
+     * three are ignored.
+     *
+     * settings_build is handed a fresh tile each time the row is tapped, and
+     * what it builds is freed on the way back, so it must not keep pointers
+     * between calls without clearing them. settings_value writes the greyed
+     * text on the right of the row and is called about once a second while
+     * settings is on screen; leave it NULL for no value.
+     */
+    const char *settings_title;
+    const char *settings_icon;      /* an LV_SYMBOL_*; may be NULL */
+    void (*settings_build)(lv_obj_t *tile);
+    void (*settings_value)(char *out, size_t cap);
 } muse_page_t;
 
 /*
@@ -70,6 +86,13 @@ typedef struct {
  * warning once the log is up.
  */
 void muse_page_register(const muse_page_t *page);
+
+/*
+ * The pages that got a tile, for the settings list to walk. Valid once the
+ * screen is built; before that the count is zero.
+ */
+int muse_page_count(void);
+const muse_page_t *muse_page_get(int i);
 
 #define MUSE_PAGE(page)                                                 \
     __attribute__((constructor)) static void page##_muse_page_reg(void) \

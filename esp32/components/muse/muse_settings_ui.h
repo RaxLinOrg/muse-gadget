@@ -33,3 +33,27 @@ void muse_settings_ui_tick(bool visible);
 
 /* True when a sub-page is open (the tileview must not steal horizontal swipes). */
 bool muse_settings_ui_in_subpage(void);
+
+/*
+ * For the settings page a registered swipe page brings with it (muse_page.h).
+ * Its settings_build is handed a tile; these give it the same chrome and rows
+ * as the firmware's own pages, back button included, so it does not have to
+ * copy the layout or find its own way back to the list.
+ *
+ * settings_build must make its page with muse_settings_ui_page(): that call is
+ * also how the page gets back to the caller, which has nowhere else to look
+ * for it. A build that does not call it leaves the list where it was.
+ *
+ * Everything built here is freed when the user goes back, so hold no pointers
+ * into it across calls without clearing them from an LV_EVENT_DELETE handler.
+ */
+lv_obj_t *muse_settings_ui_page(lv_obj_t *tile, const char *title, lv_obj_t **list_out);
+lv_obj_t *muse_settings_ui_row(lv_obj_t *list, const char *icon, const char *text,
+                               lv_obj_t **value_out, lv_event_cb_t cb, void *user);
+void muse_settings_ui_note(lv_obj_t *list, const char *text);
+
+#if LV_USE_SNAPSHOT
+/* Bench only (devices/sdkconfig.muse-bench): open the nth registered page's
+ * settings page, as >ui.sub=<n> on the console does. */
+void muse_settings_ui_bench_plug(int i);
+#endif

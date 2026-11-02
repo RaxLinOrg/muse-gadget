@@ -27,5 +27,5 @@ idf_component_register(
     WHOLE_ARCHIVE
     # muse re-exports lvgl as a public dependency, so lvgl.h comes with it.
     REQUIRES muse
-    PRIV_REQUIRES esp_http_client esp-tls mbedtls esp_netif lwip esp_timer esp_psram
+    PRIV_REQUIRES esp_http_client esp-tls mbedtls esp_netif lwip esp_timer esp_psram nvs_flash
 )
