@@ -65,3 +65,9 @@ CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
 # actually slept, and how long each power lock kept the chip awake.
 CONFIG_PM_LIGHT_SLEEP_CALLBACKS=y
 CONFIG_PM_PROFILING=y
+
+# Chinese and Japanese in captions and replies: GNU Unifont's 16x16 bitmaps
+# behind the ASCII caption font, which has none of them and draws boxes
+# instead. About 850 KB of flash, no RAM. The 1.75C has a 4 MB app slot and
+# the image is well under half of it.
+CONFIG_MUSE_CJK_FONT=y
