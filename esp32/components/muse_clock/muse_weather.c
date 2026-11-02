@@ -32,7 +32,10 @@
 #include "freertos/task.h"
 #include "sdkconfig.h"
 
+#include "muse_clock_cities.h"
 #include "muse_wifi.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 
 static const char *TAG = "weather";
 
@@ -56,6 +59,71 @@ static muse_weather_t s_now;
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool s_want_fetch = true;
 static TaskHandle_t s_task;
+
+/* Where to ask about. Points into the static city table, so the worker can
+ * read it without copying. */
+static const char *s_lat = MUSE_CITIES[0].lat;
+static const char *s_lon = MUSE_CITIES[0].lon;
+
+#define NVS_NS   "muse_clock"
+#define NVS_CITY "city"
+
+static int s_city = -1;     /* -1 until NVS is read */
+
+int muse_clock_city(void)
+{
+    if (s_city >= 0) {
+        return s_city;
+    }
+    s_city = 0;             /* the table's first entry is the default */
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        int32_t v = 0;
+        if (nvs_get_i32(h, NVS_CITY, &v) == ESP_OK && v >= 0 && v < MUSE_CITY_COUNT) {
+            s_city = (int)v;
+        }
+        nvs_close(h);
+    }
+    s_lat = MUSE_CITIES[s_city].lat;
+    s_lon = MUSE_CITIES[s_city].lon;
+    return s_city;
+}
+
+const char *muse_clock_city_name(void)
+{
+    return MUSE_CITIES[muse_clock_city()].name;
+}
+
+void muse_clock_set_city(int index)
+{
+    if (index < 0 || index >= MUSE_CITY_COUNT || index == muse_clock_city()) {
+        return;
+    }
+    s_city = index;
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_i32(h, NVS_CITY, (int32_t)index);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    ESP_LOGI(TAG, "city is now %s", MUSE_CITIES[index].name);
+    muse_weather_set_place(MUSE_CITIES[index].lat, MUSE_CITIES[index].lon);
+}
+
+void muse_weather_set_place(const char *lat, const char *lon)
+{
+    if (!lat || !lon) {
+        return;
+    }
+    /* Drop the old place's numbers before the new place's arrive, so nothing
+     * is ever shown under the wrong name. */
+    portENTER_CRITICAL(&s_lock);
+    s_now = (muse_weather_t){ 0 };
+    s_lat = lat;
+    s_lon = lon;
+    portEXIT_CRITICAL(&s_lock);
+    s_want_fetch = true;
+}
 
 bool muse_weather_fahrenheit(void)
 {
@@ -180,7 +248,7 @@ static int fetch(char *buf, size_t cap)
              "&current=temperature_2m,weather_code"
              "&daily=weather_code,temperature_2m_max,temperature_2m_min"
              "&timezone=auto&forecast_days=%d%s",
-             CONFIG_MUSE_CLOCK_LATITUDE, CONFIG_MUSE_CLOCK_LONGITUDE,
+             s_lat, s_lon,
              MUSE_WEATHER_DAYS,
              CLOCK_FAHRENHEIT ? "&temperature_unit=fahrenheit" : "");
 
@@ -269,6 +337,7 @@ void muse_weather_start(void)
     if (s_task) {
         return;
     }
+    muse_clock_city();      /* reads NVS and points s_lat/s_lon at the city */
     /* The JSON parse and mbedTLS both want room; PSRAM keeps it off the
      * internal heap, the way the TTS worker does. */
     if (xTaskCreateWithCaps(weather_task, "weather", TASK_STACK, NULL, 3, &s_task,

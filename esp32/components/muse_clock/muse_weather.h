@@ -63,6 +63,20 @@ void muse_weather_get(muse_weather_t *out);
 /* Ask for a fetch now, rather than at the next interval. */
 void muse_weather_refresh(void);
 
+/*
+ * Point it somewhere else. The stored forecast is dropped straight away, so
+ * the page shows the new place looking something up rather than the old
+ * place's numbers under a new name, and a fetch starts at once. Both strings
+ * must outlive the call (the city table is static).
+ */
+void muse_weather_set_place(const char *lat, const char *lon);
+
+/* Which city the settings page last chose, as an index into MUSE_CITIES.
+ * Reads NVS on the first call. */
+int muse_clock_city(void);
+void muse_clock_set_city(int index);
+const char *muse_clock_city_name(void);
+
 /* "Partly cloudy" and the like, for the line under the temperature. */
 const char *muse_weather_sky_name(muse_sky_t sky);
 

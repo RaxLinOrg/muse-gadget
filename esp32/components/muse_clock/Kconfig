@@ -10,29 +10,29 @@ config MUSE_CLOCK_ENABLED
         the character.
 
 config MUSE_CLOCK_LATITUDE
-    string "Latitude"
-    default "25.0330"
+    string "Custom city: latitude"
+    default "37.3382"
     depends on MUSE_CLOCK_ENABLED
     help
-        Decimal degrees, north positive. The default is Taipei. The forecast
-        comes from Open-Meteo, which needs no account and no API key, and the
-        clock takes its timezone from the same answer, so this is the only
-        place your location is configured.
+        Decimal degrees, north positive. This is the last entry in the city
+        list on the settings page, for somewhere that is not already on it.
+        The cities themselves live in muse_clock_cities.h; the one the page
+        starts on is the first in that table.
 
 config MUSE_CLOCK_LONGITUDE
-    string "Longitude"
-    default "121.5654"
+    string "Custom city: longitude"
+    default "-121.8863"
     depends on MUSE_CLOCK_ENABLED
     help
-        Decimal degrees, east positive. The default is Taipei.
+        Decimal degrees, east positive.
 
 config MUSE_CLOCK_PLACE
-    string "Place name"
-    default "Taipei"
+    string "Custom city: name"
+    default "Custom"
     depends on MUSE_CLOCK_ENABLED
     help
-        Shown along the bottom of the page, beside the time of the last
-        forecast. Cosmetic: nothing is looked up from it.
+        What the custom entry is called, in the city list and along the
+        bottom of the page. Cosmetic: nothing is looked up from it.
 
 config MUSE_CLOCK_FAHRENHEIT
     bool "Fahrenheit"

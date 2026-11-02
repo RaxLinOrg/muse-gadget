@@ -125,6 +125,18 @@ void muse_page_register(const muse_page_t *page)
     s_reg[s_reg_n++] = page;
 }
 
+/* The pages that got a tile, in tileview order. */
+int muse_page_count(void)
+{
+    /* The face and settings are the UI's own; the rest are registered. */
+    return s_tile_n > 2 ? s_tile_n - 2 : 0;
+}
+
+const muse_page_t *muse_page_get(int i)
+{
+    return i >= 0 && i < muse_page_count() ? s_tile_page[i + 1] : NULL;
+}
+
 /* Which tile is showing, as an index into s_tile_obj. */
 static int active_tile(void)
 {
