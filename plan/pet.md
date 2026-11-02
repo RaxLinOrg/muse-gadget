@@ -1,7 +1,7 @@
 # Digital pet
 
-**Status:** in progress
-**Branch:** `feat/digital-pet`
+**Status:** working
+**Branch:** `feat/digital-pet` -> `feat/digital-pet-reactions`, PR #4
 **Last updated:** 2026-11-01
 
 ## Goal
@@ -9,9 +9,28 @@
 Three buttons on the character's face — food, music and a gift. Pressing one
 makes Jolly react: it throws up the matching item, moves, and makes a sound.
 
-## Mockup
+## What it looks like
 
-The decision page, with each option drawn over a live capture of the panel:
+Food, music and the gift, captured off the panel. Each shows the button
+column in its chosen position as well as the reaction:
+
+| Food | Music | Gift |
+|---|---|---|
+| ![Chewing, carrots floating](assets/pet-food.png) | ![Swaying, notes floating](assets/pet-music.png) | ![Head dipped, gifts floating](assets/pet-gift.png) |
+
+Leaning into the food with the mouth open mid-chew; swayed over with the feet
+off the ground; head down and eyes closed on a nod.
+
+## Where they sit, and the three that lost
+
+![The four layouts considered](assets/pet-options.png)
+
+Top left is what the first commit shipped. The gap between the carrot and the
+speaker is six pixels — one fingertip covers both, which is the whole reason
+this round happened. Top right is what was chosen. The bottom two were drawn
+and rejected.
+
+The decision page these came from:
 <https://claude.ai/artifact/Ds7yfJHJ6ddnFA8P47zmST>
 
 ## Decisions
@@ -40,7 +59,7 @@ Taken 2026-11-01, after looking at the options on the real screen.
 At 10 o'clock the top button's centre was about 64 px from the speaker's, with
 26 and 32 px radii — **a six pixel gap**, so one fingertip covered both. Moving
 the column down opens that to about 54 px. *(how: measured off the layout
-arithmetic, then checked against a capture.)*
+arithmetic, then checked against the capture above.)*
 
 ## The sounds
 
