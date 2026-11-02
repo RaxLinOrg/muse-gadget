@@ -22,6 +22,18 @@ The city is picked in `Settings > Weather`:
 
 ![City picker](assets/weather-cities.png)
 
+## What was proposed, and what it became
+
+The page was drawn before any code, as a panel with three open questions on
+it. None of the three was answered the way the mockup assumed:
+
+![The mockup beside the shipped page](assets/weather-mockup.png)
+
+The mockup is here because the shipped page does not explain itself: it does
+not say why the time is 88 px rather than filling the circle, or why there is
+a city list at all. Both were decisions, and this is what they were decided
+against.
+
 ## Plan
 
 1. ~~Pick a keyless forecast API.~~ Open-Meteo.
