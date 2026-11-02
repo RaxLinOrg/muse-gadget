@@ -1,7 +1,7 @@
 # Spoken replies
 
 **Status:** working
-**Branch:** `feat/reply-by-voice`
+**Branch:** `feat/reply-by-voice` — merged to `main`; step 4 below is still open
 **Last updated:** 2026-11-01
 
 ## Goal
