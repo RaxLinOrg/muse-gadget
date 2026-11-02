@@ -8,6 +8,7 @@ after a week does not mean re-deriving it.
 |---|---|---|---|
 | [weather.md](weather.md) | Clock and weather page | working | on `main` |
 | [voice.md](voice.md) | Spoken replies through a TTS endpoint | working | on `main`, one step left |
+| [pet.md](pet.md) | Food, music and gift buttons | working | `feat/digital-pet-reactions`, PR #4 |
 | [music.md](music.md) | Music on the gadget | blocked | nothing built |
 
 ## Conventions
@@ -16,9 +17,17 @@ after a week does not mean re-deriving it.
 - **Status** is one of: `idea`, `mockup only`, `in progress`, `blocked`,
   `working`, `shipped upstream`, `abandoned`. Keep it honest — a plan that
   claims more than was verified is worse than no plan.
-- Screenshots and mockups go in `assets/`, named `<feature>-<what>.png`
-  (`music-mockup.png`, `weather-nightmode.png`). Reference them relatively,
-  e.g. `![Now playing](assets/music-mockup.png)`, which GitHub renders inline.
+- **Every design decision gets a picture beside it.** Not a link to a mockup
+  somewhere — a committed image. That means both the thing as built *and* the
+  options that were looked at and rejected, because a sentence saying three
+  layouts were considered is far less use later than the picture of them. If a
+  decision was made in a session off a screenshot or a mockup, that screenshot
+  or mockup belongs in this folder.
+- Images go in `assets/`, named `<feature>-<what>.png` (`music-mockup.png`,
+  `weather-nightmode.png`). Reference them relatively, e.g.
+  `![Now playing](assets/music-mockup.png)`, which GitHub renders inline — and
+  check it does by looking at the file on GitHub. An image that was never
+  pushed renders as broken alt text, which is how this convention got written.
 - The device screen is **466 x 466** round AMOLED. Mockups drawn at that exact
   size are directly comparable to a photo of the panel.
 - Real screens beat mockups once a feature exists. Build with

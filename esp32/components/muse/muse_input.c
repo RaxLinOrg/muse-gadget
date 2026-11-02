@@ -41,6 +41,7 @@
 #include "muse_mem.h"
 #include "muse_menu.h"
 #include "muse_page.h"
+#include "muse_pet_sound.h"
 #include "muse_settings.h"
 #include "muse_state.h"
 #include "muse_ui.h"
@@ -740,22 +741,36 @@ static void set_face(const char *name)
         [MUSE_MODE_ERROR] = "error",
         [MUSE_MODE_OFF] = "off",
     };
+    /* The pet's reactions, so the buttons can be exercised from the bench. */
+    static const struct {
+        const char *name;
+        muse_reaction_t react;
+    } REACTS[] = {
+        { "happy", MUSE_REACT_HEART },
+        { "carrot", MUSE_REACT_CARROT },
+        { "note", MUSE_REACT_NOTE },
+        { "gift", MUSE_REACT_GIFT },
+    };
     muse_state_poke();
-    bool happy = !strcmp(name, "happy");
-    if (happy) {
-        name = "idle";   /* where a finished turn hops to */
+    int react = -1;
+    for (size_t i = 0; i < sizeof(REACTS) / sizeof(REACTS[0]); i++) {
+        if (!strcmp(name, REACTS[i].name)) {
+            react = (int)i;
+            name = "idle";   /* where a finished turn hops to */
+            break;
+        }
     }
     for (int m = 0; m < MUSE_MODE_COUNT; m++) {
         if (!strcmp(name, modes[m])) {
             muse_state_set_mode(MUSE_MODE_IDLE);   /* only idle leaves "off" */
             muse_state_set_mode((muse_mode_t)m);
-            if (happy) {
-                muse_state_make_happy();
+            if (react >= 0) {
+                muse_state_react(REACTS[react].react);
             }
             return;
         }
     }
-    printf("@face.error unknown face \"%s\": boot idle listening thinking speaking error off happy\n", name);
+    printf("@face.error unknown face \"%s\": boot idle listening thinking speaking error off happy carrot note gift\n", name);
     fflush(stdout);
 }
 
@@ -836,6 +851,17 @@ static bool console_command(char *line, bool whole)
     }
     if (!strncmp(line, "ui.sub=", 7) && line[7] >= '0' && line[7] <= '9' && !line[8]) {
         muse_ui_bench_sub(line[7] - '0');
+        return true;
+    }
+    /* The pet buttons, without a finger: 0 food, 1 music, 2 gift, 3 a pet. */
+    if (!strncmp(line, "pet=", 4) && line[4] >= '0' && line[4] <= '3' && !line[5]) {
+        static const muse_reaction_t R[] = { MUSE_REACT_CARROT, MUSE_REACT_NOTE,
+                                             MUSE_REACT_GIFT, MUSE_REACT_HEART };
+        static const char *const CAP[] = { "FED", "DANCING", "A GIFT", "" };
+        muse_reaction_t r = R[line[4] - '0'];
+        muse_state_react(r);
+        muse_state_set_caption("%s", CAP[line[4] - '0']);
+        muse_pet_sound_play(r);
         return true;
     }
 #endif

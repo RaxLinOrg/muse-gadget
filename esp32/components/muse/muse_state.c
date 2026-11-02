@@ -38,6 +38,8 @@ static volatile float s_level;
 static volatile float s_progress;
 static volatile int64_t s_last_poke_us;
 static volatile int64_t s_happy_until_us;
+static volatile muse_reaction_t s_reaction;
+static volatile int64_t s_react_start_us;
 static volatile bool s_asleep;
 
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -233,8 +235,44 @@ void muse_state_nudge(void)
 
 void muse_state_make_happy(void)
 {
-    s_happy_until_us = esp_timer_get_time() + (int64_t)(HAPPY_SECS * 1e6f);
+    muse_state_react(MUSE_REACT_HEART);
+}
+
+/*
+ * How long each reaction runs. A pet is a moment; the others last as long as
+ * their clip, so the motion and the sound finish together.
+ */
+static float react_secs(muse_reaction_t r)
+{
+    switch (r) {
+    case MUSE_REACT_CARROT:
+        return 2.3f;    /* the chewing clip is 2.2 s */
+    case MUSE_REACT_NOTE:
+        return 4.3f;    /* four bars, 4.2 s */
+    case MUSE_REACT_GIFT:
+        return 1.8f;    /* two nods over a 1.2 s "thank you" */
+    default:
+        return HAPPY_SECS;
+    }
+}
+
+void muse_state_react(muse_reaction_t r)
+{
+    int64_t now = esp_timer_get_time();
+    s_reaction = r;
+    s_react_start_us = now;
+    s_happy_until_us = now + (int64_t)(react_secs(r) * 1e6f);
     muse_state_poke();
+}
+
+float muse_state_reaction_age(void)
+{
+    return (float)(esp_timer_get_time() - s_react_start_us) / 1e6f;
+}
+
+muse_reaction_t muse_state_reaction(void)
+{
+    return s_reaction;
 }
 
 float muse_state_happiness(void)
