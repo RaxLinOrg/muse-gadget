@@ -948,8 +948,39 @@ void muse_pixel_render(const muse_pose_t *p)
         bob = sinf(t * 1.8f) * 1.0f;
         break;
     }
+    /*
+     * What a pet button does, on top of whatever the mode was doing. Each one
+     * runs for the length of its clip, so the motion and the sound end
+     * together; react_t is seconds since the press, since happy sits at 1
+     * until the last 0.4 s and cannot time anything.
+     *
+     * Jolly is drawn as a shape that always faces you, so there is no turning
+     * around here: the dance is a sway and a hop.
+     */
+    float nod = 0, chew = 0;
     if (happy > 0) {
-        hop = fabsf(sinf(t * 9.0f)) * 3.0f * happy;
+        float rt = p->react_t;
+        switch (p->reaction) {
+        case MUSE_REACT_CARROT:
+            /* Three bites, leaning into the food, squashing on each one. */
+            chew = 0.5f + 0.5f * sinf(rt * TAU * 1.6f);
+            lean += 1.4f * happy;
+            hop = chew * 1.2f * happy;
+            break;
+        case MUSE_REACT_NOTE:
+            /* Sway twice a second, hop on the beat. */
+            lean += sinf(rt * TAU * 1.0f) * 3.2f * happy;
+            hop = fabsf(sinf(rt * TAU * 2.0f)) * 4.0f * happy;
+            break;
+        case MUSE_REACT_GIFT:
+            /* Two slow nods, then still. */
+            nod = rt < 1.4f ? (1.0f - cosf(rt * TAU * 1.43f)) * 0.5f : 0.0f;
+            hop = 0;
+            break;
+        default:
+            hop = fabsf(sinf(t * 9.0f)) * 3.0f * happy;
+            break;
+        }
     }
 
     /* Boot: the avatar pops up from a squash, then opens their eyes. */
@@ -966,7 +997,7 @@ void muse_pixel_render(const muse_pose_t *p)
     j.fa = j.a * 0.66f;
     j.fb = 7.4f * squash;
     j.fx = j.cx + lean * 0.3f;
-    j.fy = j.cy - j.b * 0.30f + bob * 0.3f;
+    j.fy = j.cy - j.b * 0.30f + bob * 0.3f + nod * 2.6f;
 
     /* ---- background layers ---- */
     float aura_r = 29.0f + level * 4.0f + sinf(t * 1.5f) * 1.0f;
@@ -1071,6 +1102,12 @@ void muse_pixel_render(const muse_pose_t *p)
     if (happy > 0.2f && mode != MUSE_MODE_ERROR) {
         style = EYES_HAPPY;
         mouth = MOUTH_GRIN;
+        if (p->reaction == MUSE_REACT_CARROT) {
+            mouth = MOUTH_O;        /* chewing: the grin opens and shuts */
+            mouth_open = chew;
+        } else if (p->reaction == MUSE_REACT_GIFT) {
+            open *= 1.0f - nod * 0.85f;   /* eyes close as the head goes down */
+        }
     }
 
     draw_eye(j.fx - eye_dx, eye_y, open, style, s_eyes.gx, s_eyes.gy);

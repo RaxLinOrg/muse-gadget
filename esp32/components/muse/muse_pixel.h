@@ -39,6 +39,7 @@ typedef struct {
     float level;     /* 0..1 live audio level */
     float happy;     /* 0..1 pet reaction */
     muse_reaction_t reaction;   /* what that reaction throws up */
+    float react_t;   /* seconds since it started, for timing the motion */
 } muse_pose_t;
 
 /* Accent colour of a mode (for the surrounding UI), as 0xRRGGBB. */

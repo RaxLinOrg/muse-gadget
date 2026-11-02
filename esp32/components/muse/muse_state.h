@@ -103,4 +103,6 @@ typedef enum {
 void muse_state_make_happy(void);           /* hearts */
 void muse_state_react(muse_reaction_t r);   /* happy, with items of its own */
 muse_reaction_t muse_state_reaction(void);
+/* Seconds since the current reaction started, for timing its motion. */
+float muse_state_reaction_age(void);
 float muse_state_happiness(void);

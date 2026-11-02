@@ -41,6 +41,7 @@
 #include "muse_mem.h"
 #include "muse_menu.h"
 #include "muse_page.h"
+#include "muse_pet_sound.h"
 #include "muse_settings.h"
 #include "muse_state.h"
 #include "muse_ui.h"
@@ -850,6 +851,17 @@ static bool console_command(char *line, bool whole)
     }
     if (!strncmp(line, "ui.sub=", 7) && line[7] >= '0' && line[7] <= '9' && !line[8]) {
         muse_ui_bench_sub(line[7] - '0');
+        return true;
+    }
+    /* The pet buttons, without a finger: 0 food, 1 music, 2 gift, 3 a pet. */
+    if (!strncmp(line, "pet=", 4) && line[4] >= '0' && line[4] <= '3' && !line[5]) {
+        static const muse_reaction_t R[] = { MUSE_REACT_CARROT, MUSE_REACT_NOTE,
+                                             MUSE_REACT_GIFT, MUSE_REACT_HEART };
+        static const char *const CAP[] = { "FED", "DANCING", "A GIFT", "" };
+        muse_reaction_t r = R[line[4] - '0'];
+        muse_state_react(r);
+        muse_state_set_caption("%s", CAP[line[4] - '0']);
+        muse_pet_sound_play(r);
         return true;
     }
 #endif

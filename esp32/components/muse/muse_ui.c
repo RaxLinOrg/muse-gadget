@@ -41,6 +41,7 @@
 #include "muse_menu.h"
 #include "muse_page.h"
 #include "muse_pet_icons.h"
+#include "muse_pet_sound.h"
 #include "muse_pixel.h"
 #include "muse_settings.h"
 #include "muse_settings_ui.h"
@@ -762,6 +763,7 @@ static void on_pet_event(lv_event_t *e)
     muse_state_react(b->react);
     if (muse_state_mode(NULL) == MUSE_MODE_IDLE) {   /* don't cover a reply's captions */
         muse_state_set_caption("%s", b->caption);
+        muse_pet_sound_play(b->react);   /* and don't talk over a reply either */
     }
 }
 
@@ -920,12 +922,17 @@ static void build_answer(lv_obj_t *face, int ring_in)
         int d = ring_in - spk_r - 4;   /* just inside the ring, even when swollen */
         spk_x = -(int)sqrtf((float)(d * d - spk_y * spk_y));
     }
-    /* The pet's buttons: 10, 9 and 8 o'clock, clear of the speaker above them. */
+    /*
+     * The pet's buttons, down the left edge. They used to start at 10 o'clock,
+     * which left the top one six pixels from the speaker -- one fingertip
+     * covered both. Starting at 9:30 instead opens that to about 54, and the
+     * bottom one still clears the dot row.
+     */
     int pet_x[3], pet_y[3];
     int pet_d = ring_in - PET_PX / 2 - 4;
     for (int i = 0; i < 3; i++) {
         if (muse_board->round) {
-            float th = (-60.0f - 30.0f * i) * (TAU_F / 360.0f);
+            float th = (-75.0f - 30.0f * i) * (TAU_F / 360.0f);
             pet_x[i] = (int)lroundf(pet_d * sinf(th));
             pet_y[i] = (int)lroundf(-pet_d * cosf(th));
         } else {
@@ -1960,6 +1967,7 @@ static void frame_tick(lv_timer_t *timer)
         .level = s_level,
         .happy = muse_state_happiness(),
         .reaction = muse_state_reaction(),
+        .react_t = muse_state_reaction_age(),
     };
     if (!muse_board->epaper || mode != s_last_epaper_pose) {
         muse_pixel_render(&pose);
