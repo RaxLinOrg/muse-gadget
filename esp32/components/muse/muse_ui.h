@@ -66,6 +66,8 @@ void muse_ui_request_snapshot(void);
  * is settings, with any registered pages (muse_page.h) in between; an index
  * past the end picks settings. No effect on non-touch boards. */
 void muse_ui_bench_page(int index);
+/* Then open the nth registered page's settings page (>ui.sub=<n>). */
+void muse_ui_bench_sub(int index);
 /* Display-only demo name for privacy-safe screenshots; no provisioning changes. */
 void muse_ui_bench_demo(bool enabled);
 #endif

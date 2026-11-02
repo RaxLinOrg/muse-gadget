@@ -88,6 +88,14 @@ static page_t s_plug_nav[MUSE_PAGES_MAX];
 static const muse_page_t *s_plug[MUSE_PAGES_MAX];
 static int s_plug_n;
 
+/*
+ * Where muse_settings_ui_page() files the page it just made. A plugin's
+ * settings_build only gets a tile and returns nothing, so this is how the
+ * page it builds finds its way back into the slot on_nav then shows. Set
+ * only for the length of one build.
+ */
+static lv_obj_t **s_building;
+
 /* Home values. */
 static lv_obj_t *s_home_wifi, *s_home_hatch, *s_home_ble, *s_home_sound, *s_home_sleep, *s_home_battery, *s_about;
 #if CONFIG_MUSE_VIDEO
@@ -504,7 +512,12 @@ static void on_nav(lv_event_t *e)
 {
     const page_t *page = lv_event_get_user_data(e);
     if (!*page->obj) {
+        s_building = page->obj;
         page->build(s_tile);
+        s_building = NULL;
+    }
+    if (!*page->obj) {
+        return;   /* the build made no page; better to stay put than to crash */
     }
     show(*page->obj);
     muse_settings_ui_tick(true);   /* fill it in now, not at the next tick */
@@ -1454,7 +1467,11 @@ static void build_power_page(lv_obj_t *tile)
 
 lv_obj_t *muse_settings_ui_page(lv_obj_t *tile, const char *title, lv_obj_t **list_out)
 {
-    return page(tile, title, true, list_out);
+    lv_obj_t *p = page(tile, title, true, list_out);
+    if (s_building) {
+        *s_building = p;
+    }
+    return p;
 }
 
 lv_obj_t *muse_settings_ui_row(lv_obj_t *list, const char *icon, const char *text,
@@ -1619,3 +1636,25 @@ bool muse_settings_ui_in_subpage(void)
 {
     return s_current != s_home;
 }
+
+#if LV_USE_SNAPSHOT
+/* Open the nth plugin row's page, for screenshots. Same path as a tap, so it
+ * is worth no more than the tap it stands in for. LVGL task only. */
+void muse_settings_ui_bench_plug(int i)
+{
+    if (!s_home || i < 0 || i >= s_plug_n) {
+        return;
+    }
+    const page_t *page = &s_plug_nav[i];
+    if (!*page->obj) {
+        s_building = page->obj;
+        page->build(s_tile);
+        s_building = NULL;
+    }
+    if (!*page->obj) {
+        return;
+    }
+    show(*page->obj);
+    muse_settings_ui_tick(true);
+}
+#endif

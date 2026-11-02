@@ -834,6 +834,10 @@ static bool console_command(char *line, bool whole)
         muse_ui_bench_page(line[3] - '0');
         return true;
     }
+    if (!strncmp(line, "ui.sub=", 7) && line[7] >= '0' && line[7] <= '9' && !line[8]) {
+        muse_ui_bench_sub(line[7] - '0');
+        return true;
+    }
 #endif
     if (!strncmp(line, "face=", 5)) {
         set_face(line + 5);
