@@ -9,9 +9,23 @@
 Play music on Jolly. The original shape was a Spotify page: what is playing,
 and a playlist list to pick from.
 
+## The decision this is waiting on
+
+Four routes are open and three of them make a different product. This is the
+whole of it on one page — where the bytes come from, what Jolly turns into,
+and what is closed and why:
+
+![The four routes still open](assets/music-routes.png)
+
+Nobody should start writing code until one of these is picked, because the
+page above is the only part the four have in common.
+
 ## Mockup
 
-Drawn at the real 466 x 466 in the firmware's own palette. Nothing is built.
+The original shape — a Spotify page — drawn at the real 466 x 466 in the
+firmware's own palette. It is the picture of **route 3**, and it is also
+roughly what route 1 would look like with different row contents. Nothing is
+built.
 
 ![Now playing](assets/music-mockup.png)
 
@@ -81,13 +95,14 @@ Drawn at the real 466 x 466 in the firmware's own palette. Nothing is built.
 
 ## Blockers
 
-- **Blocked on a decision, not on code.** Four workable shapes are listed
-  below; which one is built changes almost everything about the work, so
-  nothing should be written until one is picked. Rax is deciding (2026-11-01).
+- **Blocked on a decision, not on code.** Four workable shapes — pictured
+  above, spelled out below; which one is built changes almost everything about
+  the work, so nothing should be written until one is picked. Rax is deciding
+  (2026-11-01).
 
 ## Open questions
 
-- **Which way out?** Three that are actually open:
+- **Which way out?** Four that are actually open, drawn above:
   1. **Self-hosted library** — Jellyfin, Navidrome or any Subsonic server.
      Official HTTP APIs, real tokens, and the server transcodes to MP3, which
      drops straight into the existing decode path. This is the one that most
