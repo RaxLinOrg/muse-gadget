@@ -10,7 +10,7 @@ after a week does not mean re-deriving it.
 | [voice.md](voice.md) | Spoken replies through a TTS endpoint | working | on `main`, one step left |
 | [pet.md](pet.md) | Food, music and gift buttons | working | on `main` |
 | [status-row.md](status-row.md) | The first page's status row | working | on `main` |
-| [battery.md](battery.md) | Battery icon on the first page | in progress | `feat/battery-top-icon` |
+| [battery.md](battery.md) | Battery icon on the first page | working | on `main` |
 | [music.md](music.md) | Music on the gadget | blocked | nothing built |
 
 ## Conventions

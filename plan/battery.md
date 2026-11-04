@@ -1,7 +1,7 @@
 # Battery icon on the first page
 
 **Status:** working, verified on hardware
-**Branch:** `feat/battery-top-icon`
+**Branch:** `feat/battery-top-icon` — merged to `main` in #7
 **Last updated:** 2026-11-03
 
 **Note on the images:** all four PNGs are on the branch, added from a
