@@ -1,7 +1,7 @@
 # The first page's status row
 
 **Status:** working
-**Branch:** `feat/status-row`
+**Branch:** `feat/status-row` — merged to `main` in #6
 **Last updated:** 2026-11-03
 
 ## Goal
