@@ -81,14 +81,16 @@ static const char *TAG = "muse_ui";
 #define COLOR_LIT 0xf2efff
 #define SETTINGS_TICK_S 0.25f
 
-/* The battery's three bands. Red and green are the pair hardest to tell
- * apart, so the symbol's own fill carries the same news: an empty outline
- * reads as empty whether or not its colour does. */
-#define COLOR_BATT_OK 0x3ddc84
-#define COLOR_BATT_LOW 0xffcc33
-#define COLOR_BATT_FLAT 0xff5252
-#define BATT_LOW_PCT 50         /* under this, yellow */
-#define BATT_FLAT_PCT 25        /* under this, red */
+/* This rework replaces PR #6's LV_SYMBOL battery with the custom box icon
+ * from the earlier battery-top-icon work: a 40x22 outline whose fill is
+ * proportional to the charge, with a lightning bolt inside it while
+ * charging. Colours are the original spec: red under 25%, yellow 25% to
+ * under 50%, green 50% and over. */
+#define COLOR_BATT_RED 0xff5252
+#define COLOR_BATT_YELLOW 0xffd060
+#define COLOR_BATT_GREEN 0x4ade80
+#define BATT_W 40
+#define BATT_H 22
 
 /* Text on 128 px screens, as in the button menu (muse_menu.c). */
 #if LV_FONT_MONTSERRAT_12
@@ -207,9 +209,16 @@ void muse_ui_bench_demo(bool enabled)
 static lv_obj_t *s_ring;
 static lv_obj_t *s_bar;     /* compact layout's stand-in for the ring */
 static lv_obj_t *s_state_lbl;
-static uint32_t s_power_colour = COLOR_DIM;   /* what the battery label is set to now */
 static lv_obj_t *s_name_lbl;    /* this gadget's own name, to tell it from the next one */
 static lv_obj_t *s_power_lbl;
+static lv_obj_t *s_batt;          /* full layout only: icon + percentage */
+static lv_obj_t *s_batt_outline;
+static lv_obj_t *s_batt_fill;
+static lv_obj_t *s_batt_bolt_bg;  /* lit outline behind the bolt, so it */
+static lv_obj_t *s_batt_bolt;     /* reads on fill and on empty alike */
+static lv_obj_t *s_batt_nub;
+static lv_obj_t *s_batt_lbl;
+static int s_shown_batt_pct = -2; /* -2: never drawn; -1: no reading */
 static lv_obj_t *s_caption_lbl;
 static lv_obj_t *s_reply_lbl;   /* full layout: the reply's page while answering */
 static lv_obj_t *s_meter[METER_SEGS];
@@ -636,6 +645,24 @@ static lv_obj_t *make_label(lv_obj_t *parent, const lv_font_t *font, uint32_t co
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(l, "");
     return l;
+}
+
+/* Battery colour by percentage: 25% is yellow, 50% is green. */
+static uint32_t batt_color(int pct)
+{
+    if (pct < 25) {
+        return COLOR_BATT_RED;
+    }
+    return pct < 50 ? COLOR_BATT_YELLOW : COLOR_BATT_GREEN;
+}
+
+static lv_obj_t *make_box(lv_obj_t *parent, int w, int h)
+{
+    lv_obj_t *b = lv_obj_create(parent);
+    lv_obj_remove_style_all(b);
+    lv_obj_remove_flag(b, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(b, w, h);
+    return b;
 }
 
 static void show_speaker(bool on)
@@ -1186,7 +1213,48 @@ static void build_screen(void)
     const lv_font_t *status_font = s_small ? &lv_font_montserrat_14 : FONT_STATUS;
     s_wifi_icon = make_label(status, status_font, COLOR_DIM);
     s_ble_icon = make_label(status, status_font, COLOR_DIM);
-    s_power_lbl = make_label(status, s_small ? &lv_font_unscii_8 : status_font, COLOR_DIM);
+    if (!s_small) {
+        /* Full layout: the power display is a battery icon and percentage,
+         * not text. The small text label survives only as the USB-only
+         * fallback and for compact screens. */
+        s_batt = lv_obj_create(status);
+        lv_obj_remove_style_all(s_batt);
+        lv_obj_remove_flag(s_batt, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_size(s_batt, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(s_batt, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(s_batt, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(s_batt, 7, 0);
+
+        s_batt_outline = make_box(s_batt, BATT_W, BATT_H);
+        lv_obj_set_style_border_width(s_batt_outline, 2, 0);
+        lv_obj_set_style_border_opa(s_batt_outline, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(s_batt_outline, lv_color_hex(COLOR_BATT_GREEN), 0);
+        lv_obj_set_style_radius(s_batt_outline, 4, 0);
+        lv_obj_set_style_bg_opa(s_batt_outline, LV_OPA_TRANSP, 0);
+
+        s_batt_fill = make_box(s_batt_outline, 0, BATT_H - 4);
+        lv_obj_set_style_bg_color(s_batt_fill, lv_color_hex(COLOR_BATT_GREEN), 0);
+        lv_obj_set_style_bg_opa(s_batt_fill, LV_OPA_COVER, 0);
+        lv_obj_align(s_batt_fill, LV_ALIGN_LEFT_MID, 2, 0);
+
+        s_batt_bolt_bg = make_label(s_batt_outline, &lv_font_montserrat_16, COLOR_LIT);
+        lv_label_set_text(s_batt_bolt_bg, LV_SYMBOL_CHARGE);
+        lv_obj_align(s_batt_bolt_bg, LV_ALIGN_CENTER, 0, 0);
+        s_batt_bolt = make_label(s_batt_outline, &lv_font_montserrat_14, 0x000000);
+        lv_label_set_text(s_batt_bolt, LV_SYMBOL_CHARGE);
+        lv_obj_align(s_batt_bolt, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_add_flag(s_batt_bolt_bg, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_batt_bolt, LV_OBJ_FLAG_HIDDEN);
+
+        s_batt_nub = make_box(s_batt, 4, 10);
+        lv_obj_set_style_bg_color(s_batt_nub, lv_color_hex(COLOR_BATT_GREEN), 0);
+        lv_obj_set_style_bg_opa(s_batt_nub, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(s_batt_nub, 1, 0);
+
+        s_batt_lbl = make_label(s_batt, status_font, COLOR_BATT_GREEN);
+        lv_obj_add_flag(s_batt, LV_OBJ_FLAG_HIDDEN);  /* update_power() shows it */
+    }
+    s_power_lbl = make_label(status, &lv_font_unscii_8, COLOR_DIM);
 
     /* The compact layout leaves the state to the avatar and the caption,
      * unless the screen is tall enough to fit it in small type above Muse. */
@@ -1717,31 +1785,51 @@ static void update_power(float now)
     s_next_power_update = now + 1.0f;
 
     muse_power_t p = muse_state_power();
+    if (s_batt) {
+        /* Full layout: the icon, not text. No reading means no icon;
+         * the text label below keeps its USB-only fallback instead. */
+        bool show = p.battery_pct >= 0;
+        lv_obj_set_flag(s_batt, LV_OBJ_FLAG_HIDDEN, !show);
+        if (!show) {
+            const char *usb = p.usb ? "USB POWER" : "";
+            if (strcmp(usb, lv_label_get_text(s_power_lbl)) != 0) {
+                lv_label_set_text(s_power_lbl, usb);
+            }
+            lv_obj_remove_flag(s_power_lbl, LV_OBJ_FLAG_HIDDEN);
+            s_shown_batt_pct = -1;
+            return;
+        }
+        lv_obj_add_flag(s_power_lbl, LV_OBJ_FLAG_HIDDEN);
+        if (p.battery_pct != s_shown_batt_pct) {
+            uint32_t color = batt_color(p.battery_pct);
+            lv_obj_set_style_border_color(s_batt_outline, lv_color_hex(color), 0);
+            lv_obj_set_style_bg_color(s_batt_fill, lv_color_hex(color), 0);
+            lv_obj_set_style_bg_color(s_batt_nub, lv_color_hex(color), 0);
+            lv_obj_set_style_text_color(s_batt_lbl, lv_color_hex(color), 0);
+            /* Fill the outline, inside its 2 px border. */
+            lv_obj_set_width(s_batt_fill, (BATT_W - 4) * p.battery_pct / 100);
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d%%", p.battery_pct);
+            lv_label_set_text(s_batt_lbl, buf);
+            s_shown_batt_pct = p.battery_pct;
+        }
+        /* Charging is a bolt, not a colour change: the colour stays
+         * by percentage, and the percentage still shows the charge. */
+        bool bolt = p.charging;
+        lv_obj_set_flag(s_batt_bolt_bg, LV_OBJ_FLAG_HIDDEN, !bolt);
+        lv_obj_set_flag(s_batt_bolt, LV_OBJ_FLAG_HIDDEN, !bolt);
+        return;
+    }
+
+    /* Compact layout, unchanged: text only. */
     char buf[32];
-    uint32_t colour = COLOR_DIM;
     if (p.battery_pct < 0) {
-        strlcpy(buf, p.usb ? (s_small ? "USB" : "USB POWER") : "", sizeof(buf));
-    } else if (s_small) {
-        snprintf(buf, sizeof(buf), "%s%d%%", p.charging ? "+" : "", p.battery_pct);
+        strlcpy(buf, p.usb ? "USB" : "", sizeof(buf));
     } else {
-        /* The symbol's own fill level, so the reading survives in grey. */
-        const char *icon = p.battery_pct >= 90 ? LV_SYMBOL_BATTERY_FULL
-                         : p.battery_pct >= 65 ? LV_SYMBOL_BATTERY_3
-                         : p.battery_pct >= 40 ? LV_SYMBOL_BATTERY_2
-                         : p.battery_pct >= 15 ? LV_SYMBOL_BATTERY_1
-                                               : LV_SYMBOL_BATTERY_EMPTY;
-        snprintf(buf, sizeof(buf), "%s%s %d%%", p.charging ? LV_SYMBOL_CHARGE : "", icon,
-                 p.battery_pct);
-        colour = p.battery_pct >= BATT_LOW_PCT  ? COLOR_BATT_OK
-               : p.battery_pct >= BATT_FLAT_PCT ? COLOR_BATT_LOW
-                                                : COLOR_BATT_FLAT;
+        snprintf(buf, sizeof(buf), "%s%d%%", p.charging ? "+" : "", p.battery_pct);
     }
     if (strcmp(buf, lv_label_get_text(s_power_lbl)) != 0) {
         lv_label_set_text(s_power_lbl, buf);
-    }
-    if (colour != s_power_colour) {
-        lv_obj_set_style_text_color(s_power_lbl, lv_color_hex(colour), 0);
-        s_power_colour = colour;
     }
 }
 
