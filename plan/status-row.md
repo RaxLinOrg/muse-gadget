@@ -2,7 +2,7 @@
 
 **Status:** working
 **Branch:** `feat/status-row` — merged to `main` in #6
-**Last updated:** 2026-11-03
+**Last updated:** 2026-11-03 (battery part superseded the same day)
 
 ## Goal
 
@@ -37,14 +37,23 @@ Taken 2026-11-03, from the mockup
 
 ## The colour bands
 
+The bands are unchanged, but the hexes moved when the drawn icon replaced the
+symbol — see [battery.md](battery.md).
+
 | Band | Range | Hex |
 |---|---|---|
-| Green | 50 and up | `#3ddc84` |
-| Yellow | 25 – 49 | `#ffcc33` |
+| Green | 50 and up | `#4ade80` |
+| Yellow | 25 – 49 | `#ffd060` |
 | Red | under 25 | `#ff5252` |
 
-Charging prefixes `LV_SYMBOL_CHARGE`; the colour still follows the level, so a
-charging flat battery is a red bolt, not a green one.
+Charging shows a bolt; the colour still follows the level, so a charging flat
+battery is a red bolt, not a green one.
+
+**Superseded in part.** The `LV_SYMBOL` battery this file describes lasted one
+day: [battery.md](battery.md) replaced it with a drawn 40 x 22 widget whose
+fill is proportional rather than stepped, and the bolt moved inside the icon.
+What still stands here is the rest of the row — `READY` clearing only when
+Wi-Fi is up, the 20 px icons, and why the row had to leave `unscii_8`.
 
 ## Findings
 
@@ -61,14 +70,20 @@ charging flat battery is a red bolt, not a green one.
 
 ## Open questions
 
-- The charging bolt has not been seen on the panel. The board reports 100 %
-  on USB, so it never entered the charging state during testing.
+- ~~The charging bolt has not been seen on the panel.~~ **Answered
+  2026-11-03** on the `feat/battery-top-icon` branch: the board sat at
+  99 % during one capture and the bolt rendered — see
+  [battery.md](battery.md) and `assets/battery-charging.png`. That is
+  the drawn widget, not this branch's `LV_SYMBOL_CHARGE`, but it
+  settles that the charging state is reachable on USB at all.
 - Whether the freed row should stay empty or take something else. It is empty
   now, which makes the face sit alone under the icons.
 
 ## References
 
-- `esp32/components/muse/muse_ui.c` — `FONT_STATUS`, `COLOR_BATT_*`,
-  `idle_name()`, `update_power()`
+- `esp32/components/muse/muse_ui.c` — `FONT_STATUS`, `idle_name()`,
+  `update_power()`. The colour constants are now `COLOR_BATT_RED` /
+  `_YELLOW` / `_GREEN`; this file's original `COLOR_BATT_OK` / `_LOW` /
+  `_FLAT` are gone.
 - `esp32/components/muse/muse_settings_ui.c` — where `LV_SYMBOL_CHARGE` and
   `LV_SYMBOL_BATTERY_FULL` were already in use
