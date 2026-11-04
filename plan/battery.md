@@ -4,6 +4,14 @@
 **Branch:** `feat/battery-top-icon`
 **Last updated:** 2026-11-03
 
+**Note on mockups:** the PNGs referenced below (`assets/battery-top.png`,
+`assets/battery-charging.png`, `assets/battery-states.png`,
+`assets/battery-page1.png`) are not yet on this branch. The GitHub MCP
+file tools used for this PR cannot push binary PNGs — a test upload
+stored base64 text instead of PNG bytes and was removed again. Add
+those four files from the local checkout (or from the patch) before
+merging, otherwise the images below will render as broken alt text.
+
 ## Rework on top of PR #6 — read this first
 
 While the original battery-top-icon branch was blocked on GitHub
