@@ -4,13 +4,14 @@
 **Branch:** `feat/battery-top-icon`
 **Last updated:** 2026-11-03
 
-**Note on mockups:** the PNGs referenced below (`assets/battery-top.png`,
-`assets/battery-charging.png`, `assets/battery-states.png`,
-`assets/battery-page1.png`) are not yet on this branch. The GitHub MCP
-file tools used for this PR cannot push binary PNGs — a test upload
-stored base64 text instead of PNG bytes and was removed again. Add
-those four files from the local checkout (or from the patch) before
-merging, otherwise the images below will render as broken alt text.
+**Note on the images:** `battery-top.png`, `battery-charging.png` and
+`battery-states.png` are on the branch now, added from a local checkout
+— the GitHub MCP file tools cannot push binary PNGs (a test upload
+stored base64 text instead of PNG bytes and was removed again). All
+three are **mockups, not captures.** Nothing on this branch has run on
+the panel: the board was unplugged by the time the branch built, so the
+drawn widget has never been seen on hardware. The `battery-page1.png`
+the text used to point at does not exist and is no longer referenced.
 
 ## Rework on top of PR #6 — read this first
 
@@ -49,14 +50,16 @@ not implement either:
 - A battery icon centred at the bottom of the first page, above the page
   dots. That version is superseded by the top-row version below, because
   the top row is where the battery already lives and a second copy at the
-  bottom would duplicate it. The bottom mockup
-  (`assets/battery-page1.png`) is kept in the folder only as history.
+  bottom would duplicate it. That bottom mockup was never committed and
+  is not kept.
 
 ## What it looks like
 
-The mockup is the real first-page capture (`assets/pet-food.png`) with
-the top row replaced. The old `BATTERY 100%` text is gone, the `READY`
-line under it is gone, and the Wi-Fi icon and battery are larger.
+The mockup is the real first-page capture from PR #6
+(`assets/status-row-after.png`) with the top row composited over, shown
+beside the untouched capture. The `READY` line and the `BATTERY 100%`
+text went in #6; what changes here is the icon itself, from an
+`LV_SYMBOL` glyph to objects drawn at 40 x 22.
 
 ![Wi-Fi and battery icon in the top row](assets/battery-top.png)
 
@@ -190,9 +193,14 @@ None — only the confirmation in the open question below.
 None on placement.
 
 - **Confirmed 2026-11-03: top only, drop the bottom icon.** The bottom
-  icon from the previous version is not to be implemented. The bottom
-  mockup (`assets/battery-page1.png`) is kept in the folder only as
-  history of a superseded version, not as a second battery display.
+  icon from the previous version is not to be implemented, and its
+  mockup was never committed.
+
+- **Not verified on hardware.** The branch builds clean (3,477,504
+  bytes, the same size as `main`) but has never been flashed: the board
+  was disconnected before the bench build finished. Flash it and replace
+  `assets/battery-top.png` with a real capture before trusting the
+  spacing.
 
 ## References
 
@@ -203,10 +211,9 @@ None on placement.
   rule)
 - `esp32/components/muse/muse_state.h` — `muse_power_t`,
   `muse_state_power()`
-- `plan/assets/pet-food.png` — the first-page capture the mockups are
-  drawn over
-- `plan/assets/battery-top.png` — the mockup for this plan
-- `plan/assets/battery-charging.png` — the charging mockup
-- `plan/assets/battery-states.png` — the three colour states
-- `plan/assets/battery-page1.png` — the superseded bottom mockup,
-  kept as history only
+- `plan/assets/status-row-after.png` — the real capture the mockup is
+  drawn over, from PR #6
+- `plan/assets/battery-top.png` — mockup: shipped row beside this one
+- `plan/assets/battery-charging.png` — mockup: the charging bolt
+- `plan/assets/battery-states.png` — mockup: the three colour bands
+- [status-row.md](status-row.md) — PR #6, which this reworks

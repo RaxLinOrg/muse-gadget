@@ -1225,7 +1225,15 @@ static void build_screen(void)
         lv_obj_set_flex_align(s_batt, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_set_style_pad_column(s_batt, 7, 0);
 
-        s_batt_outline = make_box(s_batt, BATT_W, BATT_H);
+        /* Outline and nub ride in a box of their own: the row's 7 px
+         * column gap belongs between the battery and its percentage, not
+         * between the battery and its own terminal. */
+        lv_obj_t *body = make_box(s_batt, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(body, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(body, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(body, 1, 0);
+
+        s_batt_outline = make_box(body, BATT_W, BATT_H);
         lv_obj_set_style_border_width(s_batt_outline, 2, 0);
         lv_obj_set_style_border_opa(s_batt_outline, LV_OPA_COVER, 0);
         lv_obj_set_style_border_color(s_batt_outline, lv_color_hex(COLOR_BATT_GREEN), 0);
@@ -1246,7 +1254,7 @@ static void build_screen(void)
         lv_obj_add_flag(s_batt_bolt_bg, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_batt_bolt, LV_OBJ_FLAG_HIDDEN);
 
-        s_batt_nub = make_box(s_batt, 4, 10);
+        s_batt_nub = make_box(body, 4, 10);
         lv_obj_set_style_bg_color(s_batt_nub, lv_color_hex(COLOR_BATT_GREEN), 0);
         lv_obj_set_style_bg_opa(s_batt_nub, LV_OPA_COVER, 0);
         lv_obj_set_style_radius(s_batt_nub, 1, 0);
@@ -1254,7 +1262,7 @@ static void build_screen(void)
         s_batt_lbl = make_label(s_batt, status_font, COLOR_BATT_GREEN);
         lv_obj_add_flag(s_batt, LV_OBJ_FLAG_HIDDEN);  /* update_power() shows it */
     }
-    s_power_lbl = make_label(status, &lv_font_unscii_8, COLOR_DIM);
+    s_power_lbl = make_label(status, s_small ? &lv_font_unscii_8 : status_font, COLOR_DIM);
 
     /* The compact layout leaves the state to the avatar and the caption,
      * unless the screen is tall enough to fit it in small type above Muse. */
