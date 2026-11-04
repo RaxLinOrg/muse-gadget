@@ -1,8 +1,8 @@
 # Digital pet
 
 **Status:** working
-**Branch:** `feat/digital-pet` -> `feat/digital-pet-reactions`, PR #4
-**Last updated:** 2026-11-01
+**Branch:** `feat/digital-pet-reactions` — merged to `main` in #4
+**Last updated:** 2026-11-03
 
 ## Goal
 
@@ -84,10 +84,10 @@ measured per-half-second mean volume before and after)*.
 
 1. ~~Buttons, icons and the item each one throws up.~~
 2. ~~Decide colour and position.~~
-3. Move the column down.
-4. Embed the three clips and play the right one on each press.
-5. Motion per reaction: chewing for food, a sway and hop for music, two nods
-   for the gift.
+3. ~~Move the column down.~~
+4. ~~Embed the three clips and play the right one on each press.~~
+5. ~~Motion per reaction: chewing for food, a sway and hop for music, two nods
+   for the gift.~~
 
 ## Findings
 
@@ -104,10 +104,21 @@ measured per-half-second mean volume before and after)*.
 
 ## Open questions
 
-- What happens if a reaction's sound lands while a reply is being spoken.
-  Proposed: the reply wins and the reaction stays silent, since the reply is
-  the thing the user asked for.
-- Whether a second press during a reaction restarts it or is ignored.
+Both of the original two were settled while building it:
+
+- **A reaction's sound while a reply is being spoken:** the reply wins and the
+  reaction stays silent. `on_pet_event` only fires in `MUSE_MODE_IDLE`, and
+  `muse_voice.c` waits on `muse_pet_sound_busy()` before resting.
+- **A second press during a reaction:** ignored, not restarted. The first clip
+  rides out — the guard is at the top of `muse_pet_sound_play()`.
+
+What is still open:
+
+- **Nobody has confirmed the clips are audible**, only that they reach the
+  speaker API at the right lengths. The `>test.loopback` console command would
+  settle it.
+- **Turning around** — wanted, and not possible with a procedural body that
+  always faces the viewer. Its own piece of work if it is still wanted.
 
 ## References
 

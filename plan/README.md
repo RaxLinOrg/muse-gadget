@@ -8,7 +8,7 @@ after a week does not mean re-deriving it.
 |---|---|---|---|
 | [weather.md](weather.md) | Clock and weather page | working | on `main` |
 | [voice.md](voice.md) | Spoken replies through a TTS endpoint | working | on `main`, one step left |
-| [pet.md](pet.md) | Food, music and gift buttons | working | `feat/digital-pet-reactions`, PR #4 |
+| [pet.md](pet.md) | Food, music and gift buttons | working | on `main` |
 | [music.md](music.md) | Music on the gadget | blocked | nothing built |
 
 ## Conventions
