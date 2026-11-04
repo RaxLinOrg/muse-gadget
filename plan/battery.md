@@ -1,17 +1,17 @@
 # Battery icon on the first page
 
-**Status:** in progress
+**Status:** working, verified on hardware
 **Branch:** `feat/battery-top-icon`
 **Last updated:** 2026-11-03
 
-**Note on the images:** `battery-top.png`, `battery-charging.png` and
-`battery-states.png` are on the branch now, added from a local checkout
-— the GitHub MCP file tools cannot push binary PNGs (a test upload
-stored base64 text instead of PNG bytes and was removed again). All
-three are **mockups, not captures.** Nothing on this branch has run on
-the panel: the board was unplugged by the time the branch built, so the
-drawn widget has never been seen on hardware. The `battery-page1.png`
-the text used to point at does not exist and is no longer referenced.
+**Note on the images:** all four PNGs are on the branch, added from a
+local checkout — the GitHub MCP file tools cannot push binary PNGs (a
+test upload stored base64 text instead of PNG bytes and was removed
+again). `battery-top.png`, `battery-charging.png` and
+`battery-capture.png` are **real captures** of this branch running on
+the board. `battery-states.png` is still a mockup: the bands below 50%
+cannot be forced on a bench board. The `battery-page1.png` the text
+used to point at never existed and is no longer referenced.
 
 ## Rework on top of PR #6 — read this first
 
@@ -55,21 +55,22 @@ not implement either:
 
 ## What it looks like
 
-The mockup is the real first-page capture from PR #6
-(`assets/status-row-after.png`) with the top row composited over, shown
-beside the untouched capture. The `READY` line and the `BATTERY 100%`
-text went in #6; what changes here is the icon itself, from an
-`LV_SYMBOL` glyph to objects drawn at 40 x 22.
+Both panels below are real captures: PR #6's row on the left, this
+branch's on the right, with the row itself blown up to 4x underneath.
+The `READY` line and the `BATTERY 100%` text went in #6; what changes
+here is the icon itself, from an `LV_SYMBOL` glyph to objects drawn at
+40 x 22.
 
 ![Wi-Fi and battery icon in the top row](assets/battery-top.png)
 
 When charging, the battery keeps its percentage colour and gains a
 lightning bolt inside the icon, and the percentage still shows the
-current charge:
+current charge. Captured at 99% on USB:
 
 ![Charging battery, 62%](assets/battery-charging.png)
 
-The colour is the percentage, not a separate status:
+The colour is the percentage, not a separate status. This one is a
+mockup — a bench board on USB will not drop below 50% to order:
 
 ![Battery colour by percentage](assets/battery-states.png)
 
@@ -196,11 +197,23 @@ None on placement.
   icon from the previous version is not to be implemented, and its
   mockup was never committed.
 
-- **Not verified on hardware.** The branch builds clean (3,477,504
-  bytes, the same size as `main`) but has never been flashed: the board
-  was disconnected before the bench build finished. Flash it and replace
-  `assets/battery-top.png` with a real capture before trusting the
-  spacing.
+- **Verified on hardware 2026-11-03.** Flashed as a bench build
+  (3,477,504 bytes, the same size as `main`) and captured at
+  `assets/battery-capture.png`. The spacing reads correctly: the
+  terminal belongs to the battery, and at 99% the fill stops one pixel
+  short of the outline, which is the last percent rather than a
+  rounding bug.
+
+- **The charging bolt is confirmed.** Both this plan and
+  [status-row.md](status-row.md) listed it as never seen, because the
+  board reports 100% on USB and so never enters the charging state. It
+  was at 99% when this capture was taken, and the bolt rendered as
+  designed — a dark bolt in a light outline over a green fill.
+
+- **The bands under 50% are still unseen.** Red and yellow have never
+  rendered on the panel; a bench board on USB stays near full. The
+  colour maths is three comparisons, but the contrast against the black
+  panel has not been judged by eye.
 
 ## References
 
@@ -211,9 +224,11 @@ None on placement.
   rule)
 - `esp32/components/muse/muse_state.h` — `muse_power_t`,
   `muse_state_power()`
-- `plan/assets/status-row-after.png` — the real capture the mockup is
-  drawn over, from PR #6
-- `plan/assets/battery-top.png` — mockup: shipped row beside this one
-- `plan/assets/battery-charging.png` — mockup: the charging bolt
+- `plan/assets/status-row-after.png` — PR #6's row, the "before"
+- `plan/assets/battery-capture.png` — the raw 466 px capture of this
+  branch on the board, 2026-11-03
+- `plan/assets/battery-top.png` — both captures side by side, row at 4x
+- `plan/assets/battery-charging.png` — the charging bolt, from the same
+  capture
 - `plan/assets/battery-states.png` — mockup: the three colour bands
 - [status-row.md](status-row.md) — PR #6, which this reworks

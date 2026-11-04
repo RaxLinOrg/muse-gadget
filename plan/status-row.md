@@ -70,8 +70,12 @@ Wi-Fi is up, the 20 px icons, and why the row had to leave `unscii_8`.
 
 ## Open questions
 
-- The charging bolt has not been seen on the panel. The board reports 100 %
-  on USB, so it never entered the charging state during testing.
+- ~~The charging bolt has not been seen on the panel.~~ **Answered
+  2026-11-03** on the `feat/battery-top-icon` branch: the board sat at
+  99 % during one capture and the bolt rendered — see
+  [battery.md](battery.md) and `assets/battery-charging.png`. That is
+  the drawn widget, not this branch's `LV_SYMBOL_CHARGE`, but it
+  settles that the charging state is reachable on USB at all.
 - Whether the freed row should stay empty or take something else. It is empty
   now, which makes the face sit alone under the icons.
 
