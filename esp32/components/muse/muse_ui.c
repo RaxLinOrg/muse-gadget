@@ -81,11 +81,29 @@ static const char *TAG = "muse_ui";
 #define COLOR_LIT 0xf2efff
 #define SETTINGS_TICK_S 0.25f
 
+/* The battery's three bands. Red and green are the pair hardest to tell
+ * apart, so the symbol's own fill carries the same news: an empty outline
+ * reads as empty whether or not its colour does. */
+#define COLOR_BATT_OK 0x3ddc84
+#define COLOR_BATT_LOW 0xffcc33
+#define COLOR_BATT_FLAT 0xff5252
+#define BATT_LOW_PCT 50         /* under this, yellow */
+#define BATT_FLAT_PCT 25        /* under this, red */
+
 /* Text on 128 px screens, as in the button menu (muse_menu.c). */
 #if LV_FONT_MONTSERRAT_12
 #define FONT_COMPACT (&lv_font_montserrat_12)
 #else
 #define FONT_COMPACT (&lv_font_montserrat_14)
+#endif
+
+/* The status row, a size up from what it used to be. It has to be a
+ * Montserrat: the LV_SYMBOL glyphs live there, and unscii_8, which carried
+ * the battery text before, has none of them. */
+#if LV_FONT_MONTSERRAT_20
+#define FONT_STATUS (&lv_font_montserrat_20)
+#else
+#define FONT_STATUS (&lv_font_montserrat_14)
 #endif
 
 /*
@@ -189,6 +207,7 @@ void muse_ui_bench_demo(bool enabled)
 static lv_obj_t *s_ring;
 static lv_obj_t *s_bar;     /* compact layout's stand-in for the ring */
 static lv_obj_t *s_state_lbl;
+static uint32_t s_power_colour = COLOR_DIM;   /* what the battery label is set to now */
 static lv_obj_t *s_name_lbl;    /* this gadget's own name, to tell it from the next one */
 static lv_obj_t *s_power_lbl;
 static lv_obj_t *s_caption_lbl;
@@ -1164,9 +1183,10 @@ static void build_screen(void)
     lv_obj_set_flex_align(status, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(status, s_small ? 4 : 8, 0);
     lv_obj_align(status, LV_ALIGN_TOP_MID, 0, muse_board->rim_controls ? 40 : s_small ? 1 : 20 + s_dy);
-    s_wifi_icon = make_label(status, &lv_font_montserrat_14, COLOR_DIM);
-    s_ble_icon = make_label(status, &lv_font_montserrat_14, COLOR_DIM);
-    s_power_lbl = make_label(status, &lv_font_unscii_8, COLOR_DIM);
+    const lv_font_t *status_font = s_small ? &lv_font_montserrat_14 : FONT_STATUS;
+    s_wifi_icon = make_label(status, status_font, COLOR_DIM);
+    s_ble_icon = make_label(status, status_font, COLOR_DIM);
+    s_power_lbl = make_label(status, s_small ? &lv_font_unscii_8 : status_font, COLOR_DIM);
 
     /* The compact layout leaves the state to the avatar and the caption,
      * unless the screen is tall enough to fit it in small type above Muse. */
@@ -1526,7 +1546,11 @@ static const char *idle_name(muse_wifi_state_t wifi)
     switch (wifi) {
     case MUSE_WIFI_CONNECTED:
         joined = true;
-        return MODE_NAMES[MUSE_MODE_IDLE];
+        /* Nothing: the face and the caption already say the gadget is idle,
+         * and the row this frees goes to the status icons. The other cases
+         * below are the ones worth a word, since a missing Wi-Fi icon is
+         * easy to miss. */
+        return "";
     case MUSE_WIFI_OFF:
         return "WI-FI OFF";
     case MUSE_WIFI_NO_NETWORK:
@@ -1694,17 +1718,30 @@ static void update_power(float now)
 
     muse_power_t p = muse_state_power();
     char buf[32];
+    uint32_t colour = COLOR_DIM;
     if (p.battery_pct < 0) {
         strlcpy(buf, p.usb ? (s_small ? "USB" : "USB POWER") : "", sizeof(buf));
     } else if (s_small) {
         snprintf(buf, sizeof(buf), "%s%d%%", p.charging ? "+" : "", p.battery_pct);
-    } else if (p.charging) {
-        snprintf(buf, sizeof(buf), "CHARGING %d%%", p.battery_pct);
     } else {
-        snprintf(buf, sizeof(buf), "BATTERY %d%%", p.battery_pct);
+        /* The symbol's own fill level, so the reading survives in grey. */
+        const char *icon = p.battery_pct >= 90 ? LV_SYMBOL_BATTERY_FULL
+                         : p.battery_pct >= 65 ? LV_SYMBOL_BATTERY_3
+                         : p.battery_pct >= 40 ? LV_SYMBOL_BATTERY_2
+                         : p.battery_pct >= 15 ? LV_SYMBOL_BATTERY_1
+                                               : LV_SYMBOL_BATTERY_EMPTY;
+        snprintf(buf, sizeof(buf), "%s%s %d%%", p.charging ? LV_SYMBOL_CHARGE : "", icon,
+                 p.battery_pct);
+        colour = p.battery_pct >= BATT_LOW_PCT  ? COLOR_BATT_OK
+               : p.battery_pct >= BATT_FLAT_PCT ? COLOR_BATT_LOW
+                                                : COLOR_BATT_FLAT;
     }
     if (strcmp(buf, lv_label_get_text(s_power_lbl)) != 0) {
         lv_label_set_text(s_power_lbl, buf);
+    }
+    if (colour != s_power_colour) {
+        lv_obj_set_style_text_color(s_power_lbl, lv_color_hex(colour), 0);
+        s_power_colour = colour;
     }
 }
 
