@@ -83,6 +83,10 @@
 #define BTN_W 180
 #define BTN_H 52
 #define BAR_W 300
+/* How long a marqueed title takes to cross its row. LVGL's default gallops;
+ * this is about a character every 150 ms, which is readable rather than
+ * decorative, and four rows of it at once is still calm. */
+#define EP_SCROLL_MS 9000
 
 /* Which of the four screens is up. */
 typedef enum {
@@ -590,15 +594,25 @@ static void build_episodes(lv_obj_t *parent)
     for (int i = 0; i < MUSE_RSS_ITEMS_MAX; i++) {
         s_ep_row[i] = row(s_ep_box, EP_H, on_episode, i);
 
-        /* An episode title came off the network, so it is drawn in the 16 px
-         * caption font: the 24 px subset only has the characters the firmware
-         * owns, and a half-covered line looks like a rendering fault. */
-        s_ep_title[i] = label(s_ep_row[i], muse_page_caption_font(), COLOR_LIT, 0, -11);
+        /*
+         * An episode title came off the network, so the 24 px subset cannot
+         * draw it -- that one holds only the characters the firmware owns.
+         * muse_page_text_font() is the next best thing: one anti-aliased face
+         * for the Latin and the Chinese both, instead of unscii's pixels
+         * beside a fallback.
+         *
+         * And it marquees rather than ending in dots. These titles carry the
+         * episode number in front, so the part that gets cut is the part
+         * worth reading; LVGL only animates a label that actually overflows,
+         * so short titles sit still.
+         */
+        s_ep_title[i] = label(s_ep_row[i], muse_page_text_font(), COLOR_LIT, 0, -11);
         lv_obj_set_width(s_ep_title[i], ROW_W - 36);
-        lv_label_set_long_mode(s_ep_title[i], LV_LABEL_LONG_MODE_DOTS);
+        lv_label_set_long_mode(s_ep_title[i], LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+        lv_obj_set_style_anim_duration(s_ep_title[i], EP_SCROLL_MS, 0);
         lv_obj_align(s_ep_title[i], LV_ALIGN_LEFT_MID, 16, -11);
 
-        s_ep_sub[i] = label(s_ep_row[i], muse_page_caption_font(), COLOR_DIM, 0, 13);
+        s_ep_sub[i] = label(s_ep_row[i], muse_page_text_font(), COLOR_DIM, 0, 13);
         lv_obj_align(s_ep_sub[i], LV_ALIGN_LEFT_MID, 16, 13);
 
         lv_obj_add_flag(s_ep_row[i], LV_OBJ_FLAG_HIDDEN);
@@ -611,9 +625,10 @@ static void build_podcast(lv_obj_t *parent)
 {
     s_pod_show = label(parent, muse_page_list_font(), COLOR_DIM, 0, -150);
 
-    s_pod_title = label(parent, muse_page_caption_font(), COLOR_LIT, 0, -108);
+    s_pod_title = label(parent, muse_page_text_font(), COLOR_LIT, 0, -108);
     lv_obj_set_width(s_pod_title, 330);
     lv_label_set_long_mode(s_pod_title, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+    lv_obj_set_style_anim_duration(s_pod_title, EP_SCROLL_MS, 0);
     lv_obj_set_style_text_align(s_pod_title, LV_TEXT_ALIGN_CENTER, 0);
 
     s_pod_state = label(parent, &lv_font_unscii_16, COLOR_ACCENT, 0, -62);

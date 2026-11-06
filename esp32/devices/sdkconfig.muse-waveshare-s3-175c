@@ -71,4 +71,5 @@ CONFIG_PM_PROFILING=y
 # instead. About 850 KB of flash, no RAM. The 1.75C has a 4 MB app slot and
 # the image is well under half of it.
 CONFIG_MUSE_CJK_FONT=y
+CONFIG_MUSE_CJK_FONT_NOTO_TC=y
 CONFIG_MUSE_PAGE_CJK_24=y

@@ -263,6 +263,26 @@ menu "Muse"
             rarer characters and Korean show as boxes. Takes about 910 KB of
             flash, against about 1.2 MB.
 
+    config MUSE_CJK_FONT_NOTO_TC
+        bool "Draw CJK captions with Noto Sans TC instead of Unifont"
+        depends on MUSE_CJK_FONT
+        default n
+        help
+            Anti-aliased Noto Sans TC Medium at 16 px in place of Unifont's
+            1-bit bitmaps. Covers every hanzi in Big5, both levels, plus kana,
+            the fullwidth forms and the CJK punctuation prose uses -- two
+            fonts, 762 KB and 554 KB of rodata, which came out only 64 KB
+            larger in the binary than the Unifont subset they replace, so it
+            is a swap rather than an addition. What it gives up is Hangul and the
+            ideographs outside Big5, which show as boxes.
+
+            Traditional, unlike MUSE_CJK_FONT_NOTO, which is Noto Sans SC over
+            GB2312 and so has none of 廣 聲 樂 灣 電. Takes precedence over it
+            when both are set.
+
+            The line box is 20 px against Unifont's 17, so CJK captions sit
+            three pixels taller than they did.
+
     config MUSE_PAGE_CJK_24
         bool "Draw page lists in 24 px CJK instead of 16 px"
         depends on MUSE_CJK_FONT

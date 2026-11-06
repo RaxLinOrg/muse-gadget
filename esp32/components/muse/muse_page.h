@@ -120,6 +120,13 @@ const lv_font_t *muse_page_list_font(void);
  * anti-aliased to match muse_page_list_font(). */
 const lv_font_t *muse_page_list_sub_font(void);
 
+/* For a line of runtime text that mixes Latin and CJK -- an episode title, a
+ * now-playing line -- where unscii's pixels beside an anti-aliased fallback
+ * read as two fonts on one line. Where the board has an anti-aliased CJK font
+ * that covers ASCII as well, this is that font on its own; otherwise it is
+ * muse_page_caption_font(), which is what it replaces. */
+const lv_font_t *muse_page_text_font(void);
+
 /*
  * The pages that got a tile, for the settings list to walk. Valid once the
  * screen is built; before that the count is zero.

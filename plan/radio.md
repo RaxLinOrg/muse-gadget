@@ -481,6 +481,61 @@ costs a re-buffer of a second or so. Verified on the board: a +600 s seek on a
 
 **Flash:** 3.50 MB of the 4 MB slot with the bench build, ~500 KB free.
 
+### Readable episode titles, 2026-11-06
+
+Rax, on seeing the list: *"the episodes page, the words are not easy to read.
+(maybe we can try use 跑馬燈 if sentence is too long?"* Both halves of that got
+built.
+
+![Before, after, and a title mid-scroll](assets/episodes-readable.png)
+
+**The 跑馬燈 is `LV_LABEL_LONG_MODE_SCROLL_CIRCULAR`** on the title in each
+episode row and on the player's title, at 9 s a lap — about a character every
+150 ms. LVGL's default gallops; at this speed four rows scrolling at once read
+as a list rather than as motion. Nothing else on the page moves.
+
+**But the harder half was the font, not the length.** The titles were being
+drawn in Unifont's 1-bit 16×16 bitmaps, a face designed to fit every plane of
+Unicode into a fixed cell, next to unscii's pixel Latin — so `EP596 歡迎來到`
+was two typefaces on one line, and at 16 px the denser hanzi filled their cell
+solid. `CONFIG_MUSE_CJK_FONT_NOTO_TC` replaces Unifont with anti-aliased Noto
+Sans TC, and `muse_page_text_font()` (new, in `muse_page.h`) hands a line of
+mixed runtime text that one font for the whole line, ASCII included.
+
+**LVGL cannot hold all of Big5 in one font.** `bitmap_index` in
+`lv_font_fmt_txt_glyph_dsc_t` is a **20-bit bitfield**, so a font's glyph data
+cannot pass 1 MB — and 13063 hanzi at 16 px 4 bpp is 1.05 MB. The compiler
+catches it, but only as `unsigned conversion ... changes value from '1051100'
+to '2524'` at the end of a full build. 3 bpp would fit in one file; LVGL only
+accepts 3 bpp compressed, which this firmware does not build. So it is two
+fonts, level 1 and level 2, chained through `font.fallback` — which costs
+nothing to lay out, because the line box comes from the primary font and a
+fallback glyph is placed by its own `ofs_y` against the same baseline.
+
+**Level 2 is 2 bpp, and that is what made it fit.** At 4 bpp the pair measured
+762 KB + 1030 KB of rodata and overflowed `ota_1` by 68 KB. Four grey levels
+instead of sixteen on level 2 brings it to 762 KB + 554 KB, and the shipping
+binary grew by only 64 KB over the Unifont build: **3.57 MB of 4 MB, 444 KB
+free.** (An earlier estimate of the font cost here was made by counting glyph
+bytes and was wrong by about 40%; the figures above are `xtensa-esp32s3-elf-size
+-A` on the objects.)
+
+**Level 2 is carried for Muse, not for podcasts.** Across 56 real episode
+titles from all seven shows, level 1 alone missed nothing but emoji and one
+`Ø`. It stays because Muse's chat replies are not limited to common characters
+the way a podcast title is — dropping it would be a coverage regression against
+Unifont, which is the one thing this swap is not meant to be.
+
+What the swap gives up: Hangul and the ideographs outside Big5, which draw as
+boxes. Unifont had them; nothing on this board writes them.
+
+One subtlety recorded in `tools/muse/gen_cjk_tc_font.sh`: the `U+3000..303F`
+block is **not** taken whole. Most of it is vertical-form brackets whose glyph
+boxes are far taller than the type, and `lv_font_conv` takes `line_height` from
+the tallest box in the subset — taking the block raises it from 20 to 31 px and
+moves every CJK caption in the firmware. Only the punctuation Chinese prose
+uses is listed.
+
 ### Still open
 
 - **Nothing refreshes a feed in the background.** The fetch happens when you
@@ -498,6 +553,12 @@ costs a re-buffer of a second or so. Verified on the board: a +600 s seek on a
 - **The episode list is not scrolled, by construction.** Its window is exactly
   four rows tall, so nothing is ever half-visible — but it also means the
   scroll gesture gets no second test there.
+- **The Big5 level-2 font has never been seen drawing.** It hangs off level 1
+  through `font.fallback`, the same mechanism `caption_font()` already uses and
+  which visibly works, but no screen in this build has yet contained a
+  character outside level 1 — nothing on the board renders arbitrary text, and
+  Hatch's replies are spoken rather than captioned. A tofu box on a rare hanzi
+  is the worst this could be.
 
 ## Open questions
 
