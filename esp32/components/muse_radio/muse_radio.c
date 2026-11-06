@@ -29,6 +29,8 @@
 #include "freertos/semphr.h"
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
+#include "esp_aac_dec.h"
+#include "esp_audio_dec_default.h"
 #include "minimp3.h"
 #include "muse_audio.h"
 #include "muse_state.h"
@@ -36,20 +38,21 @@
 static const char *TAG = "radio";
 
 /*
- * Every URL here was checked by hand for a 200 and an `audio/mpeg`
- * Content-Type, because there is no AAC or Ogg decoder on the board and a
- * station that answers either would be silence with no explanation.
+ * Rax's list, 2026-11-05. Every URL was probed by hand for its status and
+ * Content-Type before it went in; plan/radio.md has the table.
  *
- * Rax asked for five Taiwanese stations on 2026-11-05. Only this one is MP3:
- * ICRT, 中廣流行網, 中廣音樂網 and 飛碟 are all AAC on Triton/revma, and
- * 好事聯播網 is HLS. They are reachable and they send ICY metadata -- they
- * need a decoder, not a different URL. plan/radio.md has the measurement.
+ * Four of these are AAC on Triton/revma, which is why the board has an AAC
+ * decoder at all, and why the fetch follows redirects: Triton answers 302
+ * with a short-lived token URL. 好事聯播網 is the one that is missing -- it
+ * publishes HLS (`.m3u8`), a protocol rather than a codec, and nothing here
+ * speaks it.
  */
 static const muse_radio_station_t s_stations[] = {
-    { "寶島新聲 FM98.5", "台語・華語流行", "http://125.227.87.206:8000/FM98.5" },
-    { "BBC WORLD SERVICE", "NEWS - ENGLISH", "https://stream.live.vc.bbcmedia.co.uk/bbc_world_service" },
-    { "RADIO PARADISE",    "ECLECTIC MIX",   "https://stream.radioparadise.com/mp3-128" },
-    { "FRANCE INTER",      "TALK - FRANCAIS", "https://icecast.radiofrance.fr/franceinter-midfi.mp3" },
+    { "ICRT",           "英語・多元音樂",   "http://n03.rcs.revma.com/x27mfpztxp3vv" },
+    { "中廣流行網",      "流行音樂・談話",   "https://n03.rcs.revma.com/aw9uqyxy2tzuv" },
+    { "中廣音樂網",      "音樂・古典",      "https://n03.rcs.revma.com/ndk05tyy2tzuv" },
+    { "飛碟聯播網",      "流行・談話節目",   "https://n10.rcs.revma.com/em90w4aeewzuv" },
+    { "寶島新聲 FM98.5", "台語・華語流行",   "http://125.227.87.206:8000/FM98.5" },
 };
 #define STATIONS ((int)(sizeof(s_stations) / sizeof(s_stations[0])))
 
@@ -61,6 +64,9 @@ static const muse_radio_station_t s_stations[] = {
 #define REFILL (12 * 1024)       /* after a stall */
 #define WORK (12 * 1024)         /* the decoder's own window on the ring */
 #define MP3_HOLD (1441 + 4)      /* the largest frame, plus the next header */
+#define AAC_HOLD 1600            /* comfortably over an ADTS frame at these rates */
+#define PCM_MAX 4096             /* samples: an HE-AAC frame is 2048 x 2 ch */
+#define MAX_HOPS 4
 #define META_MAX 512             /* of an ICY block; longer titles are cut */
 #define TITLE_MAX 96
 #define SEND_WAIT_MS 200
@@ -95,6 +101,7 @@ static char s_title[TITLE_MAX];
 static TaskHandle_t s_net, s_play;
 static volatile bool s_net_done, s_play_done;
 static volatile bool s_net_live;   /* the fetch is still on the socket */
+static volatile bool s_is_aac;     /* set by the fetch once the headers are in */
 
 muse_radio_state_t muse_radio_state(void)
 {
@@ -236,10 +243,14 @@ static bool demux(icy_t *icy, const uint8_t *p, size_t n, uint32_t epoch)
  * build on the board reported `metaint 0` for stations that plainly send it.
  * They have to be caught as they arrive.
  */
+#define LOCATION_MAX 256
+
 typedef struct {
     size_t metaint;
     bool typed;
     bool mp3;
+    bool aac;
+    char location[LOCATION_MAX];
 } hdrs_t;
 
 static esp_err_t on_header(esp_http_client_event_t *e)
@@ -254,6 +265,9 @@ static esp_err_t on_header(esp_http_client_event_t *e)
     } else if (!strcasecmp(e->header_key, "Content-Type")) {
         h->typed = true;
         h->mp3 = strstr(e->header_value, "mpeg") || strstr(e->header_value, "mp3");
+        h->aac = strstr(e->header_value, "aac") != NULL;
+    } else if (!strcasecmp(e->header_key, "Location")) {
+        snprintf(h->location, sizeof(h->location), "%s", e->header_value);
     }
     return ESP_OK;
 }
@@ -289,33 +303,60 @@ static void net_task(void *arg)
     }
     esp_http_client_set_header(c, "User-Agent", UA);
     esp_http_client_set_header(c, "Icy-MetaData", "1");
-    if (esp_http_client_open(c, 0) != ESP_OK) {
-        ESP_LOGW(TAG, "connect failed (internal heap %u free)",
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-        s_status = "CAN'T REACH STATION";
-        goto out;
+    /*
+     * Triton (revma), which carries most of the Taiwanese stations, answers
+     * the published URL with a 302 to a short-lived token URL on whichever
+     * node is nearest -- and it drops from https to http on the way. So the
+     * redirect is followed here rather than left to the client: this way the
+     * headers from the *final* response are the ones that pick the decoder.
+     */
+    for (int hop = 0; ; hop++) {
+        if (esp_http_client_open(c, 0) != ESP_OK) {
+            ESP_LOGW(TAG, "connect failed (internal heap %u free)",
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+            s_status = "CAN'T REACH STATION";
+            goto out;
+        }
+        if (esp_http_client_fetch_headers(c) < 0) {
+            s_status = "NO RESPONSE";
+            goto out;
+        }
+        status = esp_http_client_get_status_code(c);
+        if (status < 300 || status > 399) {
+            break;
+        }
+        if (hop >= MAX_HOPS || !hdrs.location[0]) {
+            ESP_LOGW(TAG, "redirect %d with nowhere to go", status);
+            s_status = "STATION KEEPS REDIRECTING";
+            goto out;
+        }
+        ESP_LOGI(TAG, "%d -> %s", status, hdrs.location);
+        esp_http_client_close(c);
+        if (esp_http_client_set_url(c, hdrs.location) != ESP_OK) {
+            s_status = "BAD REDIRECT";
+            goto out;
+        }
+        hdrs.location[0] = '\0';
+        hdrs.typed = false;
     }
-    if (esp_http_client_fetch_headers(c) < 0) {
-        s_status = "NO RESPONSE";
-        goto out;
-    }
-    status = esp_http_client_get_status_code(c);
     if (status != 200) {
         ESP_LOGW(TAG, "HTTP %d", status);
         s_status = status == 404 ? "STATION GONE" : "STATION REFUSED US";
         goto out;
     }
-    /* No AAC or Ogg decoder on this board, so anything but MP3 would be
-     * silence with no explanation. Refuse it instead. */
-    if (hdrs.typed && !hdrs.mp3) {
-        ESP_LOGW(TAG, "Content-Type is not MP3");
-        s_status = "NOT AN MP3 STREAM";
+    /* MP3 and AAC are what the board decodes. Ogg and HLS are not, and either
+     * would otherwise be silence with no explanation. */
+    if (hdrs.typed && !hdrs.mp3 && !hdrs.aac) {
+        ESP_LOGW(TAG, "unplayable Content-Type");
+        s_status = "UNPLAYABLE STREAM";
         goto out;
     }
+    s_is_aac = hdrs.aac;
     icy->metaint = hdrs.metaint;
     icy->audio_left = icy->metaint;
     icy->need = -1;
-    ESP_LOGI(TAG, "%s: connected, metaint %u", st->name, (unsigned)icy->metaint);
+    ESP_LOGI(TAG, "%s: connected, %s, metaint %u", st->name, s_is_aac ? "AAC" : "MP3",
+             (unsigned)icy->metaint);
 
     for (;;) {
         if (epoch != s_epoch) {
@@ -402,13 +443,13 @@ static void play_task(void *arg)
 {
     uint32_t epoch = (uint32_t)(uintptr_t)arg;
     mp3dec_t dec;
+    void *aac = NULL;
     uint8_t *mp3 = heap_caps_malloc(WORK, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    int16_t *pcm = heap_caps_malloc(MINIMP3_MAX_SAMPLES_PER_FRAME * sizeof(int16_t),
-                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    int16_t *out = heap_caps_malloc((MINIMP3_MAX_SAMPLES_PER_FRAME + 8) * sizeof(int16_t),
-                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    int16_t *pcm = heap_caps_malloc(PCM_MAX * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    int16_t *out = heap_caps_malloc((PCM_MAX + 8) * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     size_t len = 0;
     int rate = 0;
+    bool is_aac = false;
     resampler_t rs = { 0 };
 
     mp3dec_init(&dec);
@@ -420,6 +461,18 @@ static void play_task(void *arg)
     if (!wait_for(PREBUFFER, epoch)) {
         goto out;
     }
+    /* The fetch has the headers by now -- nothing reaches the ring before
+     * they are in -- so this is where the format is known. */
+    is_aac = s_is_aac;
+    if (is_aac) {
+        esp_aac_dec_cfg_t cfg = ESP_AAC_DEC_CONFIG_DEFAULT();
+        cfg.aac_plus_enable = true;   /* these stations are HE-AAC, not plain LC */
+        if (esp_aac_dec_open(&cfg, sizeof(cfg), &aac) != ESP_AUDIO_ERR_OK || !aac) {
+            ESP_LOGW(TAG, "no AAC decoder");
+            s_status = "NO AAC DECODER";
+            goto out;
+        }
+    }
     s_state = MUSE_RADIO_PLAYING;
 
     while (epoch == s_epoch) {
@@ -428,7 +481,7 @@ static void play_task(void *arg)
             size_t got = xStreamBufferReceive(s_ring, mp3 + len, room, pdMS_TO_TICKS(RECV_WAIT_MS));
             len += got;
         }
-        if (len <= MP3_HOLD) {
+        if (len <= (is_aac ? AAC_HOLD : MP3_HOLD)) {
             /* The link fell behind the speaker. Hold the station on screen and
              * refill rather than dropping back to the list. */
             if (!s_net_live) {
@@ -442,25 +495,49 @@ static void play_task(void *arg)
             continue;
         }
         size_t off = 0;
-        while (len - off > MP3_HOLD && epoch == s_epoch) {
-            mp3dec_frame_info_t info;
-            int samples = mp3dec_decode_frame(&dec, mp3 + off, len - off, pcm, &info);
-            if (!info.frame_bytes) {
-                break;   /* needs more bytes to find a header */
+        while (len - off > (is_aac ? AAC_HOLD : MP3_HOLD) && epoch == s_epoch) {
+            int samples, hz, channels;
+            if (is_aac) {
+                esp_audio_dec_in_raw_t raw = { .buffer = mp3 + off, .len = len - off };
+                esp_audio_dec_out_frame_t frame = { .buffer = (uint8_t *)pcm,
+                                                    .len = PCM_MAX * sizeof(int16_t) };
+                esp_audio_dec_info_t info = { 0 };
+                esp_audio_err_t err = esp_aac_dec_decode(aac, &raw, &frame, &info);
+                if (err == ESP_AUDIO_ERR_DATA_LACK) {
+                    break;   /* the rest of this frame is still on the wire */
+                }
+                /* A decoder that consumed nothing and failed is sitting on
+                 * junk; step over a byte so it can find the next sync word
+                 * rather than spinning on the same one. */
+                off += raw.consumed ? raw.consumed : 1;
+                if (err != ESP_AUDIO_ERR_OK) {
+                    continue;
+                }
+                channels = info.channel ? info.channel : 1;
+                hz = (int)info.sample_rate;
+                samples = (int)(frame.decoded_size / sizeof(int16_t)) / channels;
+            } else {
+                mp3dec_frame_info_t info;
+                samples = mp3dec_decode_frame(&dec, mp3 + off, len - off, pcm, &info);
+                if (!info.frame_bytes) {
+                    break;   /* needs more bytes to find a header */
+                }
+                off += info.frame_bytes;
+                channels = info.channels;
+                hz = info.hz;
             }
-            off += info.frame_bytes;
-            if (!samples) {
+            if (samples <= 0) {
                 continue;
             }
-            if (info.channels == 2) {
+            if (channels == 2) {
                 for (int k = 0; k < samples; k++) {
                     pcm[k] = (pcm[2 * k] + pcm[2 * k + 1]) / 2;
                 }
             }
-            if (rate != info.hz) {
-                ESP_LOGI(TAG, "stream: %d Hz, %d ch, %d kbps", info.hz, info.channels, info.bitrate_kbps);
-                rate = info.hz;
-                resampler_init(&rs, info.hz, MUSE_AUDIO_RATE);
+            if (rate != hz) {
+                ESP_LOGI(TAG, "stream: %s, %d Hz, %d ch", is_aac ? "AAC" : "MP3", hz, channels);
+                rate = hz;
+                resampler_init(&rs, hz, MUSE_AUDIO_RATE);
             }
             size_t n = resample(&rs, pcm, samples, out);
             /* Blocking, so the speaker is what paces this whole task. */
@@ -474,12 +551,19 @@ static void play_task(void *arg)
             len -= off;
         } else if (len >= WORK) {
             /* A full window with no frame in it is junk, not audio. */
-            ESP_LOGW(TAG, "no MP3 frame in %u bytes, resyncing", (unsigned)len);
+            ESP_LOGW(TAG, "no frame in %u bytes, resyncing", (unsigned)len);
             len = 0;
-            mp3dec_init(&dec);
+            if (is_aac) {
+                esp_aac_dec_reset(aac);
+            } else {
+                mp3dec_init(&dec);
+            }
         }
     }
 out:
+    if (aac) {
+        esp_aac_dec_close(aac);
+    }
     free(mp3);
     free(pcm);
     free(out);
@@ -556,6 +640,7 @@ bool muse_radio_play(int i)
     set_title("");
     s_index = i;
     s_state = MUSE_RADIO_CONNECTING;
+    s_is_aac = false;
     s_net_live = true;
     void *epoch = (void *)(uintptr_t)s_epoch;
     /* Stacks in PSRAM: minimp3 wants ~16 KB and internal RAM is down to a few

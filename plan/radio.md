@@ -1,6 +1,6 @@
 # Internet radio and podcasts
 
-**Status:** radio implemented, podcasts not started
+**Status:** radio implemented (MP3 + AAC), podcasts not started
 **Branch:** `docs/radio-plan`
 **Last updated:** 2026-11-05
 
@@ -64,7 +64,7 @@ registered with `MUSE_PAGE` and `WHOLE_ARCHIVE`. Off with
 
 | File | What it is |
 |---|---|
-| `muse_radio.c` | the stream: HTTPS fetch, ICY demux, minimp3, resample, speaker |
+| `muse_radio.c` | the stream: fetch, redirects, ICY demux, MP3/AAC decode, resample, speaker |
 | `muse_radio_page.c` | the tile: toggle, list, player |
 
 **The type is sized by the CJK font.** Station names are Chinese now, and the
@@ -109,6 +109,25 @@ logged `metaint 0` for stations `curl` plainly shows sending `icy-metaint:
 16000`. An `HTTP_EVENT_ON_HEADER` handler fixes it, and the now-playing line
 then follows the stream: *Wes Parker — Dinosaur Park*, then *Morphine — Swing
 It Low* when the track changed — *(how: the capture below, 2026-11-05)*.
+
+**AAC, because Taiwan streams AAC.** Four of the five stations Rax asked for
+are AAC on Triton/revma, so the page carries a second decoder:
+`espressif/esp_audio_codec` (~2.6), opened with `aac_plus_enable` because
+these are HE-AAC rather than plain LC. The format is chosen from the final
+response's `Content-Type`, and the two decoders share everything after the
+frame: mono mix, resampler, speaker. AAC frames decode to 2048 samples a
+channel against MP3's 1152, so the PCM buffer is sized for the larger and the
+hold-back is per format.
+
+It is a prebuilt binary component under Espressif's own licence, not Apache
+like the rest of the tree. That was Rax's call, taken 2026-11-05 once the
+measurement showed the alternative was four stations that could not play.
+
+**Redirects are followed by hand.** Triton answers the published URL with a
+302 to a short-lived token URL on the nearest node, dropping from https to
+http on the way. `disable_auto_redirect` stays on and the loop re-opens on
+`Location` itself, up to four hops, so the headers that pick the decoder are
+the *final* response's rather than the redirect's.
 
 **The page refuses what it cannot play.** Non-200 and any Content-Type
 without `mpeg`/`mp3` in it stop with a reason on screen rather than silence,
@@ -156,9 +175,9 @@ second of both at once at the start of a talk press.
   now-playing line has to be empty rather than guessed — *(how: `curl` from
   this machine, 2026-11-05)*. The ICRT line here is superseded by the
   finding below: that was the wrong URL.
-- **Four of the five Taiwanese stations Rax asked for need a decoder this
-  board does not have.** Asked on 2026-11-05 for ICRT, 中廣, 飛碟, 好事 and
-  寶島新聲 as the defaults. Every one was looked up in the
+- **Four of the five Taiwanese stations Rax asked for are AAC — now they
+  play.** Asked on 2026-11-05 for ICRT, 中廣, 飛碟, 好事 and 寶島新聲 as the
+  defaults. Every one was looked up in the
   [radio-browser](https://www.radio-browser.info/) directory and then probed
   directly:
 
@@ -172,11 +191,21 @@ second of both at once at the start of a talk press.
   | 飛碟 南台灣之聲 | 200 | audio/aac | no decoder |
   | 好事聯播網 港都983 | 200 | `application/vnd.apple.mpegurl` | HLS, not a stream |
 
-  The four AAC ones are **reachable and healthy** — they answer 200 and send
-  `icy-metaint: 16000`. They need an AAC decoder, not a different URL. 好事
-  needs an HLS client as well, which is a protocol rather than a codec.
-  Only 寶島新聲 is in the firmware — *(how: `curl -L` with the firmware's own
-  user agent, 2026-11-05)*.
+  The four AAC ones were reachable and healthy all along — 200, with
+  `icy-metaint: 16000`. They needed a decoder, not a different URL, and they
+  have one now. 好事 is the one left out: HLS is a protocol rather than a
+  codec, and nothing here speaks it — *(how: `curl -L` with the firmware's
+  own user agent, then each one played on the board)*.
+- **All five in the table play on the board.** Driven one after another from
+  the console: ICRT (AAC 48 kHz), 中廣流行網 (AAC 44.1 kHz, with a Chinese
+  ICY title on screen), 中廣音樂網 (AAC, `CHRISTOPHER - TULIPS`), 飛碟聯播網
+  (AAC 48 kHz) and 寶島新聲 (MP3 44.1 kHz). Every one reached `PLAYING` with
+  an empty error — *(how: `page=radio:play=<n>` across the table,
+  2026-11-05)*.
+- **HE-AAC decodes at the station's full rate.** `aac_plus_enable` gives
+  48 kHz and 44.1 kHz output rather than the half-rate core, which the
+  resampler then takes down to 16 kHz. Worth knowing because the cheaper
+  option — ignoring SBR — would also have "worked", just dully.
 - **The earlier "ICRT can't be reached from this network" was wrong.** It was
   measured against `live.leanstream.co`, which 403s for everyone. ICRT's
   Triton/revma stream answers 200 from here. What rules ICRT out is the
@@ -201,11 +230,12 @@ second of both at once at the start of a talk press.
 
 ## Open questions
 
-- **An AAC decoder?** It is the one thing standing between this page and the
-  stations Rax actually wants. `espressif/esp_audio_codec` is on the
-  component registry (2.6.2) and decodes AAC, but it is a binary component
-  under Espressif's own licence, and it would mean a second decode path and
-  following the 302 that Triton answers with. Not started; Rax's call.
+- **好事聯播網 needs an HLS client.** The only one of Rax's five still
+  missing. That is a playlist to poll and MPEG-TS segments to demux, which is
+  a bigger job than the codec was.
+- **Five rows is now the hard limit.** At 16 px type the list holds five and
+  the sixth runs off the round panel. A longer table needs either scrolling —
+  which the toggle decision was taken to avoid — or shorter rows.
 - **The 1 Hz handover to Muse.** A talk press and the radio overlap for up to
   a second. Cheap to fix properly by hooking the press rather than polling the
   mode, if it grates in use.

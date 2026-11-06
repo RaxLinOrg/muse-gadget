@@ -44,11 +44,12 @@
 /*
  * Sizes are set by the CJK font: its cell is 16 px, so a station name in
  * Chinese cannot be drawn smaller or larger than that, and the rows are built
- * around it. Four rows fit at this height; a fifth would run off the round
- * panel's edge.
+ * around it. Five rows fit at this height and a sixth would run off the round
+ * panel's edge, which is the real limit on the station table's length -- the
+ * list does not scroll, by the decision in plan/radio.md.
  */
 #define ROW_W 330
-#define ROW_H 64
+#define ROW_H 56
 #define Y_TOGGLE (-166)
 #define PILL_W 112
 #define PILL_H 38
@@ -249,8 +250,8 @@ static void build_list(lv_obj_t *parent)
     lv_obj_remove_flag(s_rows, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(s_rows, ROW_W, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(s_rows, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(s_rows, 8, 0);
-    lv_obj_align(s_rows, LV_ALIGN_CENTER, 0, 10);
+    lv_obj_set_style_pad_row(s_rows, 6, 0);
+    lv_obj_align(s_rows, LV_ALIGN_CENTER, 0, 16);
 
     for (int i = 0; i < muse_radio_count() && i < 8; i++) {
         const muse_radio_station_t *st = muse_radio_station(i);
@@ -258,12 +259,12 @@ static void build_list(lv_obj_t *parent)
         lv_obj_add_flag(s_row[i], LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(s_row[i], on_row, LV_EVENT_CLICKED, (void *)(intptr_t)i);
 
-        s_row_name[i] = label(s_row[i], muse_page_caption_font(), COLOR_LIT, 0, -13);
-        lv_obj_align(s_row_name[i], LV_ALIGN_LEFT_MID, 16, -13);
+        s_row_name[i] = label(s_row[i], muse_page_caption_font(), COLOR_LIT, 0, -11);
+        lv_obj_align(s_row_name[i], LV_ALIGN_LEFT_MID, 16, -11);
         lv_label_set_text(s_row_name[i], st->name);
 
-        s_row_genre[i] = label(s_row[i], muse_page_caption_font(), COLOR_DIM, 0, 13);
-        lv_obj_align(s_row_genre[i], LV_ALIGN_LEFT_MID, 16, 13);
+        s_row_genre[i] = label(s_row[i], muse_page_caption_font(), COLOR_DIM, 0, 11);
+        lv_obj_align(s_row_genre[i], LV_ALIGN_LEFT_MID, 16, 11);
         lv_label_set_text(s_row_genre[i], st->genre);
 
         s_row_mark[i] = label(s_row[i], &lv_font_unscii_16, COLOR_ACCENT, 0, 0);
