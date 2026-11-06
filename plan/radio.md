@@ -1,7 +1,7 @@
 # Internet radio and podcasts
 
-**Status:** radio implemented (MP3, AAC and HLS); podcasts decided
-(option B, seven shows), not yet built
+**Status:** radio implemented (MP3, AAC and HLS), now at 24 px in a
+scrolling list; podcasts decided (option B, seven shows), not yet built
 **Branch:** `docs/radio-plan`
 **Last updated:** 2026-11-06
 
@@ -252,6 +252,76 @@ second of both at once at the start of a talk press.
   feed to parse (XML on an ESP32), an episode list to hold, and a resume
   position per show in NVS. Same tile, but not the same size of job.
 
+## Font size, and whether a list can scroll
+
+**Both built and on the board, 2026-11-06.** Rax asked two questions the same
+evening — can a list scroll, and can the type be bigger — and they turn out to
+be the same question, because enlarging the type is what makes a list too long
+for the circle.
+
+![Before, after, and scrolled to the end](assets/radio-font-scroll.png)
+
+### Scrolling: yes, and it costs nothing
+
+**The tileview only takes horizontal drags.** Every tile is added with
+`LV_DIR_LEFT | LV_DIR_RIGHT` (`muse_ui.c`), so a vertical drag has no
+competing claimant and the row container can simply be made scrollable. This
+is the opposite of the STOP/BACK bug, where a *horizontal* drift was claimed
+by the tileview: the axes do not overlap, so page-turning is untouched.
+
+`SCROLL_CHAIN` is cleared on the container anyway, so an over-scroll at either
+end stops there rather than becoming a page turn.
+
+**It cannot be verified from here.** A finger cannot be simulated over USB, so
+the console grew `>page=radio:scroll=<px>` and the third panel above is the
+list driven to its end programmatically. That proves the geometry and the
+clipping; it does not prove the gesture.
+
+### Type: yes, up to 24 px, and only for names the firmware owns
+
+The ceiling was never the font pipeline — it is the **4 MB app slot, of which
+3.61 MB was already used**. Unifont's CJK alone is 1.2 MB of that.
+
+| Font | Coverage | Flash |
+|---|---|---|
+| Unifont 16 px (today's fallback) | every CJK ideograph, kana, Hangul | 1.2 MB |
+| Noto TC, Big5 level 1, 16 px | 5495 common traditional characters | 0.44 MB |
+| Noto TC, Big5 level 1, 24 px | same | 0.86 MB |
+| **Noto TC, the names only, 16 + 24 px** | **the 78 characters the tables use** | **25 KB** |
+
+*(how: `lv_font_conv@1.5.3` against NotoSansTC-Medium, bytes counted in the
+generated C.)*
+
+**So the subset is what shipped.** `CONFIG_MUSE_PAGE_CJK_24` adds 25 KB and
+gives `muse_page_list_font()` (24 px) and `muse_page_list_sub_font()` (16 px,
+anti-aliased to match). Both fall back to the caption font, so nothing
+disappears — it is drawn small instead.
+
+- **This works only for text the firmware owns.** Station names and genres are
+  a compiled-in table, so their characters are known at build time. An episode
+  title or an ICY now-playing line arrives from the network and will fall back
+  to 16 px Unifont. Podcasts under option B put a runtime title on screen at
+  level 2, so that line cannot be enlarged this way.
+- **Adding a station now means regenerating the font.** A missing character
+  does not fail the build; it draws small beside its 24 px neighbours.
+  `tools/muse/gen_page_cjk_font.sh` carries the character list.
+- **The existing Noto option is useless here.** `CONFIG_MUSE_CJK_FONT_NOTO` is
+  Noto Sans **SC** over GB2312 — simplified only, so 廣, 聲, 樂, 灣 and 電 are
+  all missing. Every one of them is in a station name. Unifont is the only
+  full fallback this board has.
+- **The row grew from 48 px to 56 px**, so five of the six stations are on
+  screen and the sixth is a scroll away. Six no longer fit, and that is the
+  point: the limit moved from the panel to the scroll.
+
+### What would make runtime text bigger
+
+Replacing Unifont with Noto TC Big5 level 1 at 24 px is **0.86 MB against
+1.2 MB — it saves 340 KB** and makes every CJK glyph on the gadget bigger and
+anti-aliased, captions and chat replies included. The cost is coverage: no
+Hangul, no kana, and no rare or simplified-only character, each of which
+becomes a box in a Muse reply. Not taken tonight, because it changes what chat
+can draw and that is a decision about the whole gadget rather than this page.
+
 ## Podcasts: the SHOWS half
 
 **Decided 2026-11-06. Not built.** Mockups:
@@ -334,10 +404,11 @@ now has a two-deep stack where radio had none.
 
 ## Open questions
 
-- **Six rows is the hard limit.** At 16 px type and 48 px rows the list holds
-  six, and that is the round panel's edge. A seventh station needs either
-  scrolling — which the toggle decision was taken to avoid — or a smaller
-  CJK font than the board has.
+- ~~**Six rows is the hard limit.**~~ **Closed 2026-11-06.** The list scrolls
+  now, so the panel's edge is no longer the bound; see "Font size, and whether
+  a list can scroll" above. The toggle decision was taken to avoid scrolling,
+  and this gives it up — knowingly, because the alternative was keeping the
+  type at 8 px-equivalent Unifont.
 - **HLS carries video the board pays for and throws away.** Most of each
   segment is H.264. It costs download, not CPU, but on a metered link it
   would matter. An audio-only variant would be the fix if the station

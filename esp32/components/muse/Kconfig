@@ -263,6 +263,19 @@ menu "Muse"
             rarer characters and Korean show as boxes. Takes about 910 KB of
             flash, against about 1.2 MB.
 
+    config MUSE_PAGE_CJK_24
+        bool "Draw page lists in 24 px CJK instead of 16 px"
+        depends on MUSE_CJK_FONT
+        default n
+        help
+            Noto Sans TC Medium at 24 px, 4 bpp, covering only the characters
+            the compiled-in station and show names use -- about 17 KB of
+            flash, against 0.86 MB for every common traditional character.
+            Pages ask for it with muse_page_list_font(); captions and chat
+            replies are untouched and stay in the 16 px cell. Runtime text
+            from the network (an episode title, an ICY now-playing line) is
+            not covered and falls back to the 16 px font.
+
     config MUSE_JC3248W535_MIC_GPIO
         int "JC3248W535: GPIO for an external I2S mic's data (SD) line"
         depends on MUSE_BOARD_GUITION_JC3248W535

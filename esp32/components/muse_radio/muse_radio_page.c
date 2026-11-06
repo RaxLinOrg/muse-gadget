@@ -49,7 +49,22 @@
  * station table's length is bounded by the glass.
  */
 #define ROW_W 330
+#if CONFIG_MUSE_PAGE_CJK_24
+/* A 24 px name over a 16 px genre, so the row grows and six of them no longer
+ * fit the circle -- which is what SCROLL_H below is for. */
+#define ROW_H 56
+#define NAME_DY (-12)
+#define GENRE_DY 14
+#else
 #define ROW_H 48
+#define NAME_DY (-10)
+#define GENRE_DY 10
+#endif
+/* The window the rows scroll inside: its top clears the toggle, its bottom
+ * clears the page dots, and the circle is still wider than a row at both
+ * edges. The tileview takes LV_DIR_LEFT | LV_DIR_RIGHT only, so a vertical
+ * drag has no other claimant and turning pages is unaffected. */
+#define SCROLL_H 300
 #define Y_TOGGLE (-166)
 #define PILL_W 112
 #define PILL_H 38
@@ -64,6 +79,7 @@ static lv_obj_t *s_now_name, *s_now_genre, *s_now_state, *s_now_title;
 static bool s_shows;    /* which half of the toggle is up */
 static volatile bool s_bench_open;   /* a console tune wants the player up */
 static volatile int s_bench_half = -1;   /* a console toggle: 0 RADIO, 1 SHOWS */
+static volatile int s_bench_scroll = -1; /* a console scroll, in pixels: no finger over USB */
 
 static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *font, uint32_t color,
                        int16_t dx, int16_t dy)
@@ -247,11 +263,21 @@ static void build_list(lv_obj_t *parent)
      * holds, instead of each one carrying a hand-placed offset. */
     s_rows = lv_obj_create(parent);
     lv_obj_remove_style_all(s_rows);
-    lv_obj_remove_flag(s_rows, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(s_rows, ROW_W, LV_SIZE_CONTENT);
+    lv_obj_set_size(s_rows, ROW_W, SCROLL_H);
     lv_obj_set_flex_flow(s_rows, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(s_rows, 5, 0);
-    lv_obj_align(s_rows, LV_ALIGN_CENTER, 0, 22);
+    lv_obj_align(s_rows, LV_ALIGN_CENTER, 0, 26);
+    /* Vertical only: the tileview owns the horizontal axis and turns pages.
+     * SCROLL_CHAIN off so an over-scroll at either end stops here instead of
+     * becoming a page turn. */
+    lv_obj_add_flag(s_rows, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(s_rows, LV_OBJ_FLAG_SCROLL_CHAIN);
+    lv_obj_set_scroll_dir(s_rows, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_rows, LV_SCROLLBAR_MODE_ACTIVE);
+    lv_obj_set_style_bg_color(s_rows, lv_color_hex(COLOR_ACCENT), LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(s_rows, LV_OPA_60, LV_PART_SCROLLBAR);
+    lv_obj_set_style_width(s_rows, 4, LV_PART_SCROLLBAR);
+    lv_obj_set_style_radius(s_rows, 2, LV_PART_SCROLLBAR);
 
     for (int i = 0; i < muse_radio_count() && i < 8; i++) {
         const muse_radio_station_t *st = muse_radio_station(i);
@@ -259,12 +285,12 @@ static void build_list(lv_obj_t *parent)
         lv_obj_add_flag(s_row[i], LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(s_row[i], on_row, LV_EVENT_CLICKED, (void *)(intptr_t)i);
 
-        s_row_name[i] = label(s_row[i], muse_page_caption_font(), COLOR_LIT, 0, -10);
-        lv_obj_align(s_row_name[i], LV_ALIGN_LEFT_MID, 16, -10);
+        s_row_name[i] = label(s_row[i], muse_page_list_font(), COLOR_LIT, 0, -10);
+        lv_obj_align(s_row_name[i], LV_ALIGN_LEFT_MID, 16, NAME_DY);
         lv_label_set_text(s_row_name[i], st->name);
 
-        s_row_genre[i] = label(s_row[i], muse_page_caption_font(), COLOR_DIM, 0, 10);
-        lv_obj_align(s_row_genre[i], LV_ALIGN_LEFT_MID, 16, 10);
+        s_row_genre[i] = label(s_row[i], muse_page_list_sub_font(), COLOR_DIM, 0, 10);
+        lv_obj_align(s_row_genre[i], LV_ALIGN_LEFT_MID, 16, GENRE_DY);
         lv_label_set_text(s_row_genre[i], st->genre);
 
         s_row_mark[i] = label(s_row[i], &lv_font_unscii_16, COLOR_ACCENT, 0, 0);
@@ -338,6 +364,10 @@ static void tick(bool visible)
         paint_toggle();
         show_player(false);
     }
+    if (s_bench_scroll >= 0 && s_rows) {
+        lv_obj_scroll_to_y(s_rows, s_bench_scroll, LV_ANIM_OFF);
+        s_bench_scroll = -1;
+    }
     if (s_bench_open && muse_radio_index() >= 0) {
         s_bench_open = false;
         paint_player();
@@ -373,6 +403,10 @@ static bool bench(const char *arg)
     }
     if (!strcmp(arg, "stop")) {
         muse_radio_stop();
+        return true;
+    }
+    if (!strncmp(arg, "scroll=", 7)) {
+        s_bench_scroll = atoi(arg + 7);
         return true;
     }
     if (!strcmp(arg, "shows") || !strcmp(arg, "list")) {

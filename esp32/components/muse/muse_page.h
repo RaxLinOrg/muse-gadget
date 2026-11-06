@@ -108,6 +108,18 @@ void muse_page_register(const muse_page_t *page);
  */
 const lv_font_t *muse_page_caption_font(void);
 
+/* The font for a page's own list rows. Without CONFIG_MUSE_PAGE_CJK_24 this is
+ * muse_page_caption_font(); with it, a 24 px Noto that covers only the
+ * characters the compiled-in names use, with the 16 px font behind it as a
+ * fallback -- so a name drawn from a page's own table is 24 px and anything
+ * that arrived over the network is 16 px. Mixing the two on one line looks
+ * exactly as uneven as it sounds, so draw network text in the caption font. */
+const lv_font_t *muse_page_list_font(void);
+
+/* The smaller line under a list row, in the caption font's 16 px cell but
+ * anti-aliased to match muse_page_list_font(). */
+const lv_font_t *muse_page_list_sub_font(void);
+
 /*
  * The pages that got a tile, for the settings list to walk. Valid once the
  * screen is built; before that the count is zero.

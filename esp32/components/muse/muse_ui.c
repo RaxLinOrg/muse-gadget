@@ -623,6 +623,48 @@ const lv_font_t *muse_page_caption_font(void)
     return caption_font();
 }
 
+#if CONFIG_MUSE_PAGE_CJK_24
+LV_FONT_DECLARE(muse_font_page_cjk_24)
+LV_FONT_DECLARE(muse_font_page_cjk_16)
+#endif
+
+/* A page's list rows, where the text is the compiled-in names a page owns
+ * rather than anything that came off the network. With CONFIG_MUSE_PAGE_CJK_24
+ * that is Noto at 24 px with only those names' characters in it; the 16 px
+ * caption font sits behind it for everything else, which is what an episode
+ * title or an ICY line falls back to. */
+const lv_font_t *muse_page_list_font(void)
+{
+#if CONFIG_MUSE_PAGE_CJK_24
+    static lv_font_t font;
+    if (!font.get_glyph_dsc) {
+        font = muse_font_page_cjk_24;
+        font.fallback = caption_font();
+    }
+    return &font;
+#else
+    return caption_font();
+#endif
+}
+
+/* The line under a list row. Same cell as the caption font, but anti-aliased
+ * to match the row above it -- Unifont's 1-bit bitmaps beside 24 px Noto read
+ * as a rendering bug rather than a hierarchy. Same fallback, so anything
+ * outside the compiled-in names still draws. */
+const lv_font_t *muse_page_list_sub_font(void)
+{
+#if CONFIG_MUSE_PAGE_CJK_24
+    static lv_font_t font;
+    if (!font.get_glyph_dsc) {
+        font = muse_font_page_cjk_16;
+        font.fallback = caption_font();
+    }
+    return &font;
+#else
+    return caption_font();
+#endif
+}
+
 #if CONFIG_MUSE_CJK_FONT
 #define CJK_BAND_PAD 6          /* px each side of a CJK caption on a small screen */
 #define CJK_LINE_SPACE 4

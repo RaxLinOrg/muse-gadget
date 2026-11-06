@@ -63,6 +63,10 @@ if(CONFIG_MUSE_ENABLED)
     elseif(CONFIG_MUSE_CJK_FONT)
         list(APPEND srcs "fonts/muse_font_cjk_16.c")
     endif()
+    if(CONFIG_MUSE_PAGE_CJK_24)
+        list(APPEND srcs "fonts/muse_font_page_cjk_24.c")   # pages' bigger list font
+        list(APPEND srcs "fonts/muse_font_page_cjk_16.c")   # ... and its caption line
+    endif()
     # Your own character (tools/muse/AVATAR_RECIPE.md) stands in for the default
     # avatar when avatar/muse_pixel.c exists here; this avatar/ is gitignored. The
     # default is in avatar/ at the top of the project.
