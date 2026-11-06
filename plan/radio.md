@@ -1,7 +1,7 @@
 # Internet radio and podcasts
 
-**Status:** mockup only
-**Branch:** TBD — nothing built
+**Status:** radio implemented, podcasts not started
+**Branch:** `docs/radio-plan`
 **Last updated:** 2026-11-05
 
 ## Goal
@@ -14,11 +14,23 @@ service to get permission from.
 ## What it looks like
 
 Drawn at the real 466 x 466 in the firmware's palette, so these sit beside a
-photo of the panel. Nothing is built; these are mockups.
+photo of the panel. These are the mockups the decisions below were taken
+from; the shipped page follows them, with the differences noted under
+*What was built*.
 
 ![The list, both halves of the toggle](assets/radio-page.png)
 
 ![The two players](assets/radio-players.png)
+
+And this is the page on the board, captured over the USB cable from a bench
+build on 2026-11-05 — the station list, the SHOWS half of the toggle, and the
+player with a live ICY title on it:
+
+![The station list on the panel](assets/radio-shipped-list.png)
+
+![The SHOWS half, empty until podcasts exist](assets/radio-shipped-shows.png)
+
+![The player, on air, with the track the station sent](assets/radio-shipped-player.png)
 
 ## Decisions
 
@@ -44,6 +56,53 @@ Taken 2026-11-05, from the mockup
   cannot resume where you left it. A podcast is a fixed thing, so it gets
   position, duration, ±30 s and a resume point.
 
+## What was built
+
+`esp32/components/muse_radio/`, a component of its own like `muse_clock`,
+registered with `MUSE_PAGE` and `WHOLE_ARCHIVE`. Off with
+`CONFIG_MUSE_RADIO_ENABLED=n`, which drops the tile rather than hiding it.
+
+| File | What it is |
+|---|---|
+| `muse_radio.c` | the stream: HTTPS fetch, ICY demux, minimp3, resample, speaker |
+| `muse_radio_page.c` | the tile: toggle, list, player |
+
+**Radio only.** SHOWS is the empty state the toggle was chosen to make
+possible — "NO SHOWS YET / PODCASTS COME AFTER RADIO". Nothing moves when the
+RSS half arrives.
+
+**Two tasks, both with PSRAM stacks, and a 48 KB ring between them.** The
+fetch task strips ICY metadata and pushes MP3 bytes; the decode task pulls,
+decodes, resamples and writes. `muse_audio_write()` is blocking, so the
+speaker paces the whole chain and nothing needs a timer. 20 KB prebuffer
+before the first sample, 12 KB to recover from a stall. The split is what
+absorbs network jitter — one task doing both would stall audio on every slow
+read.
+
+**The decode path is the TTS one.** Same `MP3_HOLD` hold-back so minimp3 can
+see the next frame header, same stereo-to-mono mix, same linear resampler to
+16 kHz. The resampler is now in the tree **three times**
+(`muse_chat_session.cpp`, `muse_voice_call_core.c`, here); it is twenty lines
+and the other two are `static` in files this cannot include, so it was copied
+rather than refactored. Worth unifying, not worth blocking this on.
+
+**ICY headers have to be caught as they arrive.** `esp_http_client` keeps
+only the response headers it needs itself, so asking it for `icy-metaint`
+after `fetch_headers()` comes back empty — the first build on the board
+logged `metaint 0` for stations `curl` plainly shows sending `icy-metaint:
+16000`. An `HTTP_EVENT_ON_HEADER` handler fixes it, and the now-playing line
+then follows the stream: *Wes Parker — Dinosaur Park*, then *Morphine — Swing
+It Low* when the track changed — *(how: the capture below, 2026-11-05)*.
+
+**The page refuses what it cannot play.** Non-200 and any Content-Type
+without `mpeg`/`mp3` in it stop with a reason on screen rather than silence,
+because there is no AAC or Ogg decoder on the board.
+
+**Muse wins the speaker.** `tick()` runs ~1 Hz whichever page is visible; if
+the mode is listening, thinking or speaking, the radio stops. Stop, not
+pause: a live stream cannot resume where it left off. The cost is up to a
+second of both at once at the start of a talk press.
+
 ## Findings
 
 - **The speaker picks the content.** The audio path is hardwired to 16 kHz
@@ -61,23 +120,58 @@ Taken 2026-11-05, from the mockup
   those two routes specifically are refused. [vm-config.md](vm-config.md) has
   the measurement and the code is on `feat/vm-config` — *(how: a bench build
   on the board, over a live session)*.
+- **Only three of eight candidate streams are usable, and none is
+  Taiwanese.** Every URL was checked with `curl -I -H 'Icy-MetaData: 1'`
+  before any was compiled in:
+
+  | Stream | Code | Content-Type | `icy-metaint` |
+  |---|---|---|---|
+  | BBC World Service | 200 | **audio/mpeg** | 16000 |
+  | Radio Paradise `mp3-128` | 200 | **audio/mpeg** | 16000 |
+  | France Inter `midfi` | 200 | **audio/mpeg** | none |
+  | Radio Paradise `rock-128` | 200 | audio/aac | 16000 |
+  | listen.moe | 200 | audio/ogg | none |
+  | SomaFM Groove Salad | 403 | — | — |
+  | **ICRT** | **403** | text/html | — |
+  | Radio.co (revma) | 302 → 200 | audio/aac | 16000 |
+
+  Three things follow. AAC and Ogg are common and there is no decoder for
+  either, so the table is MP3-only and the page checks Content-Type. **ICRT
+  403s from this network**, and the gadget is on the same Wi-Fi, so shipping
+  it as a default would ship a station that cannot work — the Taiwanese
+  stations are absent for that reason, not by choice. And ICY metadata is
+  real but not universal: France Inter sends none, so the now-playing line
+  has to be empty rather than guessed — *(how: `curl` from this machine,
+  2026-11-05)*.
 - **Rebuffering is not an edge case.** A 16 kHz stream over a weak link
   stalls; this board logged `rssi -86` and three join attempts on an ordinary
   evening. The stalled state is drawn because it will be seen often: the
   station stays on screen and refills rather than dropping back to the list.
+- **Two of the three stations send ICY metadata; France Inter sends none.**
+  Confirmed on the board, not only by `curl`. So the now-playing line is real
+  and worth having, and it is also genuinely empty a third of the time —
+  which is why it is a line that can be blank rather than a field with a
+  placeholder in it.
+- **BBC serves the board a 24 kHz, 56 kbps variant.** `curl` on the laptop
+  and the gadget get different encodings from the same URL. It decodes fine,
+  but it is a reminder that the stream a station hands you is not fixed —
+  the resampler earns its place — *(how: `radio: stream: 24000 Hz, 2 ch, 56
+  kbps` in the boot log)*.
 - **Podcasts cost much more than radio.** Radio is a URL. A podcast is an RSS
   feed to parse (XML on an ESP32), an episode list to hold, and a resume
   position per show in NVS. Same tile, but not the same size of job.
 
 ## Open questions
 
-- **Radio first, podcasts second?** The toggle makes this natural: SHOWS can
-  be an empty state until the RSS side exists. Not yet agreed.
-- **Where does the page sit in the tile order?** It would be the second
-  registered page, after the clock, making four dots.
-- **ICY metadata.** Shoutcast and Icecast streams carry a now-playing title
-  in-band. The "NOW PLAYING" line in the mockup assumes it; whether the
-  chosen stations actually send it has not been checked.
+- **The 1 Hz handover to Muse.** A talk press and the radio overlap for up to
+  a second. Cheap to fix properly by hooking the press rather than polling the
+  mode, if it grates in use.
+- **Where does the page sit in the tile order?** Registration order, so after
+  the clock today — four dots.
+- **Nothing rests the codecs while the radio plays.** `muse_voice.c` powers
+  the codecs down when Muse sleeps on battery with nothing to do, and it does
+  not know the radio exists. Whether a stream survives that, or should, is
+  untested.
 - **Internal RAM is tight.** The heartbeat showed `min=4K` free internal heap.
   PSRAM is fine (2.7 MB free) and the stream buffer belongs there, but
   anything new in internal RAM needs watching.

@@ -810,6 +810,24 @@ static bool console_command(char *line, bool whole)
         }
         return true;
     }
+    /* `page=<name>:<rest>` drives a registered page from the console. The
+     * pages themselves say what <rest> means. */
+    if (!strncmp(line, "page=", 5)) {
+        const char *name = line + 5;
+        const char *colon = strchr(name, ':');
+        size_t n = colon ? (size_t)(colon - name) : strlen(name);
+        for (int i = 0; i < muse_page_count(); i++) {
+            const muse_page_t *p = muse_page_get(i);
+            if (p->bench && !strncmp(p->name, name, n) && !p->name[n]) {
+                printf("@page %s %s\n", p->name, p->bench(colon ? colon + 1 : "") ? "ok" : "?");
+                fflush(stdout);
+                return true;
+            }
+        }
+        printf("@page ? no page takes that\n");
+        fflush(stdout);
+        return true;
+    }
     bool reset = !strcmp(line, "power.reset");
     if (reset || !strcmp(line, "power")) {
         if (reset) {

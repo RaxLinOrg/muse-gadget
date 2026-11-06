@@ -77,6 +77,17 @@ typedef struct {
     const char *settings_icon;      /* an LV_SYMBOL_*; may be NULL */
     void (*settings_build)(lv_obj_t *tile);
     void (*settings_value)(char *out, size_t cap);
+
+    /*
+     * Bench only: the console's `page=<name>:<rest>` hands <rest> here, so a
+     * page can be driven without a finger on the glass -- which is the only
+     * way to exercise one over the USB cable. True if the page understood it.
+     *
+     * It runs on the console task, not the UI one, so it must not touch LVGL.
+     * A page that wants to redraw sets a flag its own tick() picks up.
+     * May be NULL.
+     */
+    bool (*bench)(const char *arg);
 } muse_page_t;
 
 /*

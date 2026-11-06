@@ -1,0 +1,16 @@
+menu "Muse radio page"
+
+config MUSE_RADIO_ENABLED
+    bool "Internet radio page"
+    default y
+    help
+        Adds a swipe page listing a handful of internet radio stations and
+        plays the one you tap through the speaker. Turning this off leaves
+        the page out of the tileview entirely, so settings stays one swipe
+        closer to the character.
+
+        The station list is compiled in (muse_radio.c), and every URL in it
+        must be plain MP3 over HTTPS: there is no AAC or Ogg decoder on the
+        board, and the page refuses a stream whose Content-Type is neither.
+
+endmenu
