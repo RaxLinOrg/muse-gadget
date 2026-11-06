@@ -1,7 +1,8 @@
 # Internet radio and podcasts
 
 **Status:** radio implemented (MP3, AAC and HLS), now at 24 px in a
-scrolling list; podcasts decided (option B, seven shows), not yet built
+scrolling list; podcasts implemented too — option B, seven shows, four
+episodes each, with a resume point per show in NVS
 **Branch:** `docs/radio-plan`
 **Last updated:** 2026-11-06
 
@@ -32,6 +33,9 @@ player with a live ICY title on it:
 ![The SHOWS half, empty until podcasts exist](assets/radio-shipped-shows.png)
 
 ![The player, on air, with the track the station sent](assets/radio-shipped-player.png)
+
+That empty SHOWS half is now filled; the three screens behind it are under
+[Podcasts: the SHOWS half](#podcasts-the-shows-half).
 
 ## Decisions
 
@@ -324,7 +328,8 @@ can draw and that is a decision about the whole gadget rather than this page.
 
 ## Podcasts: the SHOWS half
 
-**Decided 2026-11-06. Not built.** Mockups:
+**Decided 2026-11-06, and built the same day** — see "Built" below for what
+the board actually does. Mockups:
 <https://claude.ai/artifact/XMLK42mbxoMfv4eHtp62Rp>
 
 ### The shows
@@ -390,17 +395,109 @@ in to 242 px — narrower than a row. Four is what the circle allows.
 to the shows list, which is the one place B costs more than a flag: the page
 now has a two-deep stack where radio had none.
 
+### Built, 2026-11-06
+
+![The three levels, running on the board](assets/podcast-built.png)
+
+All four panels above are the real screen, not mockups. New files:
+`muse_podcast_rss.{c,h}` (the feed reader), `muse_podcast.{c,h}` (the engine),
+and two more screens in `muse_radio_page.c`.
+
+**The parser is the only genuinely new code, and it was tested off the board.**
+`muse_podcast_rss.c` deliberately has no ESP-IDF in it, so a host harness could
+compile it and run all seven real feeds through it three ways: whole, in
+1460-byte reads, and one byte at a time. All three agree on every field of
+every item, which is what says no chunk boundary is special — the state that a
+read can land in the middle of (a tag name, an attribute list, an entity, a
+CDATA terminator) is all in the struct. The results were then compared against
+an independent extraction in Python: no mismatches.
+
+It is not an XML parser. Inside an `<item>` it keeps the **first** title,
+pubDate, duration and enclosure it sees and ignores everything else's text.
+That rule is what lets it read straight past a `<description>` full of escaped
+HTML without tracking where that element ends, because in all seven feeds the
+title comes first. A feed that put its description first would show that
+description's first tag as a title — a wrong line, not a crash.
+
+**Correcting the estimate above: four items cost 12–51 KB, not "about 10 KB".**
+Measured on the real feeds: 台灣通勤 12 KB, 游庭皓 14 KB, Gooaye 25 KB, All-In
+31 KB, 跳脫 Do 式圈 34 KB, 博音 39 KB, 法客電台 50 KB. The point stands — a
+50 KB read of an 8.2 MB feed is still the feed's size ceasing to matter — but
+the number was optimistic by up to 5x, because the descriptions these shows
+write are long.
+
+**Every enclosure answers 302, and `esp_http_client` does not follow it here.**
+Auto-redirect only runs inside `perform()`; when the body is read by hand with
+`open`/`fetch_headers`/`read`, a 302 is just a 302. This cost the first build
+on the board, which retried four times and gave up. The hops are now walked in
+`net_task` as the radio's fetch does, and because `Range` is set on the handle
+it survives `set_url()` — which is what makes a resume survive the redirect.
+
+**`URL_MAX 320` did not have to grow after all.** The bound named above is the
+radio's, and podcasts never go through it: the long URLs live in the podcast
+module's own `MUSE_RSS_URL_MAX`, which is 768 from the start, and in the
+redirect buffer beside it. `muse_radio.c` is untouched but for one line.
+
+**The resume point.** One record per show in NVS: a 32-bit hash of the
+enclosure URL **with the query string cut off**, the byte offset, and the file
+length — 12 bytes. The query has to go because SoundOn and Firstory regenerate
+a `?timestamp=` or `?v=` on every feed build, so hashing the whole URL would
+throw the place away roughly daily; the path carries the episode's own id on
+all seven feeds. It is written when playback stops and when PAUSE is pressed —
+a deliberate pause being the moment you are most likely to put the gadget down
+— and **not** on a seek, which would be a flash write per tap of -30.
+
+The open question above asked whether the offset should be dropped at the end.
+It is, and also at both other places where resuming would be unkind: under 30
+seconds in there is nothing to come back to, and within 45 seconds of the end
+it would resume something you had finished.
+
+**A bug worth recording.** The save first lived in the decoder task's exit
+path, behind the same `epoch == s_epoch` check the radio uses. That check can
+never be true on a stop, because moving the epoch is *how* a stop tells the
+workers to leave — so nothing was ever written, and the board said `resume=-1`
+after a clean run. The save belongs on the side that initiates the teardown,
+after it has waited for the workers.
+
+**PAUSE is a real pause, not a stop and restart.** The decoder stops writing to
+the speaker, the ring fills, and the fetch stalls on its own backpressure with
+the socket still open. Resuming is instant. If the server hangs up during a
+long pause, the fetch reconnects at the byte it had reached, which is the same
+path a dropped connection takes.
+
+**Muse pauses the episode rather than stopping it**, and lets go again when it
+is done — the opposite of the radio, which stops, because a live stream has no
+place to come back to.
+
+**One speaker, so the two halves stop each other.** `muse_radio_play()` calls
+`muse_podcast_stop()` and `muse_podcast_play()` calls `muse_radio_stop()`.
+Between them that is the whole arrangement; neither the page nor the console
+has to remember it.
+
+**Seeking reopens the socket.** ±30 s is converted to bytes through the file's
+average bitrate and the connection is made again with a new `Range`, which
+costs a re-buffer of a second or so. Verified on the board: a +600 s seek on a
+73.5 MB episode asked for byte 15,655,078 and got `206`.
+
+**Flash:** 3.50 MB of the 4 MB slot with the bench build, ~500 KB free.
+
 ### Still open
 
-- **One resume point per show in NVS** is a few dozen bytes. Resuming silently
-  is the kind thing right up until it resumes something you had finished, so
-  the offset probably has to be dropped when it reaches the end.
-- **The tileview steals presses from its children** (see the scroll-chain
-  finding above). B adds two more screens of buttons to a page where that was
-  already the one real bug, so every new button needs the same
-  `LV_OBJ_FLAG_SCROLL_CHAIN` treatment.
-- **Nothing refreshes a feed in the background.** Under B the fetch happens when
-  you tap a show, so the first episode list of a session waits on the network.
+- **Nothing refreshes a feed in the background.** The fetch happens when you
+  tap a show, so the first episode list of a session waits on the network —
+  one to three seconds, and the screen says `LOADING...` while it does.
+- **The clocks drift from the bar on a variable-bitrate episode.** The bar is
+  the byte fraction and is exact; the two times go through
+  `total_bytes / duration`. These feeds are constant-bitrate MP3, so today it
+  is exact too, but nothing enforces that.
+- **There is no STOP on the episode player**, only PAUSE. Playback ends by
+  finishing, failing, or starting something else. Whether that wants a stop
+  button is a question for using it.
+- **A fifth episode is unreachable.** The parser keeps four and the circle
+  holds four; an older episode cannot be got to at all.
+- **The episode list is not scrolled, by construction.** Its window is exactly
+  four rows tall, so nothing is ever half-visible — but it also means the
+  scroll gesture gets no second test there.
 
 ## Open questions
 

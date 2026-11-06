@@ -15,7 +15,7 @@
 # As with muse_clock: nothing in the firmware calls in here, so a plain
 # archive would lose the MUSE_PAGE constructor to the linker.
 if(CONFIG_MUSE_RADIO_ENABLED)
-    set(srcs "muse_radio.c" "muse_radio_page.c")
+    set(srcs "muse_radio.c" "muse_podcast.c" "muse_podcast_rss.c" "muse_radio_page.c")
 else()
     set(srcs "")
 endif()
@@ -25,5 +25,5 @@ idf_component_register(
     INCLUDE_DIRS "."
     WHOLE_ARCHIVE
     REQUIRES muse
-    PRIV_REQUIRES esp_http_client esp-tls mbedtls esp_netif lwip esp_timer esp_psram minimp3
+    PRIV_REQUIRES esp_http_client esp-tls mbedtls esp_netif lwip esp_timer esp_psram minimp3 nvs_flash
 )
