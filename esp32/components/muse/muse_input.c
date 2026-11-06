@@ -45,6 +45,7 @@
 #include "muse_settings.h"
 #include "muse_state.h"
 #include "muse_ui.h"
+#include "muse_vm_config.h"
 #include "muse_voice.h"
 #include "muse_wifi.h"
 #if CONFIG_MUSE_VIDEO
@@ -808,6 +809,11 @@ static bool console_command(char *line, bool whole)
             fflush(stdout);
             free(json);
         }
+        return true;
+    }
+    /* The VM settings round trip: read, seed if the VM has none, read back. */
+    if (!strcmp(line, "vmcfg")) {
+        muse_vm_config_selftest();
         return true;
     }
     bool reset = !strcmp(line, "power.reset");

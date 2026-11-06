@@ -36,6 +36,7 @@ if(CONFIG_MUSE_ENABLED)
         "muse_settings.c"
         "muse_text.c"
         "muse_link.c"
+        "muse_vm_config.c"
         "muse_ble.c")
     if(CONFIG_MUSE_UI_FREEINK)
         # E-paper: FreeInk draws the face, Settings and the keyboard.
