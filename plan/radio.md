@@ -1,7 +1,7 @@
 # Internet radio and podcasts
 
-**Status:** radio implemented (MP3, AAC and HLS); podcasts measured and
-mocked up, waiting on a decision
+**Status:** radio implemented (MP3, AAC and HLS); podcasts decided
+(option B, seven shows), not yet built
 **Branch:** `docs/radio-plan`
 **Last updated:** 2026-11-06
 
@@ -254,77 +254,83 @@ second of both at once at the start of a talk press.
 
 ## Podcasts: the SHOWS half
 
-**Not built. Mocked up 2026-11-06 for a decision**
-(<https://claude.ai/artifact/XMLK42mbxoMfv4eHtp62Rp>).
+**Decided 2026-11-06. Not built.** Mockups:
+<https://claude.ai/artifact/XMLK42mbxoMfv4eHtp62Rp>
 
-Four real Taiwanese feeds were fetched before anything was drawn, the same way
-the stations were probed before they were compiled in. What came back decides
-most of the layout.
+### The shows
 
-| Show | Feed XML | Items | Newest | Audio |
+Rax's seven, 2026-11-06. Feed URLs resolved through the iTunes lookup API and
+each one fetched, so these are the real published feeds and the table is
+measured rather than assumed.
+
+| Show | Feed | Feed XML | Items | Newest |
 |---|---|---|---|---|
-| Gooaye 股癌 | 3.2 MB | 711 | 49.6 min | MP3, 49 MB, ~132 kbps |
-| 百靈果 News | 10.4 MB | 1104 | 80.8 min | MP3 |
-| 台灣通勤第一品牌 | 1.8 MB | 597 | 53.8 min | MP3 |
-| 聽天下：天下雜誌 | 22.8 MB | 4857 | 31.7 min | MP3 |
+| All-In | `rss.libsyn.com/shows/254861/destinations/1928300.xml` | 4.2 MB | 442 | 85.8 min |
+| 跳脫 Do 式圈 | `feeds.soundon.fm/podcasts/22505944-…xml` | 1.4 MB | 223 | 25.9 min |
+| 博音 | `feed.firstory.me/rss/user/ckyjmnkp0166d0830od1kznfj` | 2.3 MB | 253 | 46.7 min |
+| 游庭皓的財經皓角 | `feeds.soundcloud.com/users/soundcloud:users:735679489/sounds.rss` | 1.6 MB | 500 | 31.6 min |
+| Gooaye 股癌 | `feeds.soundon.fm/podcasts/954689a5-…xml` | 3.2 MB | 711 | 49.6 min |
+| 台灣通勤第一品牌 | `anchor.fm/s/1ea77470/podcast/rss` | 1.8 MB | 597 | 53.8 min |
+| 法客電台 | `feed.firstory.me/rss/user/ckudnw7fn4tqg0870axzgirva` | 8.2 MB | 832 | 74.9 min |
 
-*(how: `curl -L -A 'muse-gadget/1.0'` on each feed, URLs from the iTunes lookup
-API; enclosure probed with `curl -I -r 0-1 -L`.)*
+**"All-In" is read as the Chamath / Jason / Sacks / Friedberg show**, the one
+that matches the finance half of this list. Two other podcasts carry the name;
+if it was one of those, it is a one-line change.
 
-- **Every enclosure is MP3.** The AAC decoder and the TS demuxer the radio
-  needed sit this one out — podcasts land on the minimp3 path that already
-  works.
-- **A feed is up to 22 MB of XML and the board has 2.7 MB of free PSRAM**, so
-  it can never be held whole. But items are newest-first, so a parser that
-  stops after five `<item>` elements reads about 10 KB and closes the socket.
-  The size stops mattering the moment the parse is streaming — and it must be
-  streaming, which is the one piece of real new code.
-- **Resume can be exact rather than estimated.** A ranged request on 股癌's
-  enclosure answered `206` with `content-range: bytes 0-1/49081287`. So the
-  gadget stores the *byte offset* it stopped at and asks for that, with no
-  bitrate guess and no drift on a variable-rate file.
-- **One redirect, a 148-character URL.** Inside the existing `MAX_HOPS 4` and
-  `URL_MAX 320`. Nothing in the fetch path has to grow.
+*(how: `curl -L -A 'muse-gadget/1.0'` on each feed; enclosures probed with a
+ranged `GET`.)*
 
-### The decision in front of us: how deep does SHOWS go?
+- **Every enclosure is MP3** (`type="audio/mpeg"`, all seven). The AAC decoder
+  and the TS demuxer the radio needed sit this one out — podcasts land on the
+  minimp3 path that already works.
+- **A feed is 1.4–8.2 MB of XML and the board has 2.7 MB of free PSRAM**, so it
+  can never be held whole. Items are newest-first, so a parser that stops after
+  four `<item>` elements reads about 10 KB and closes the socket. The size stops
+  mattering the moment the parse is streaming — and it has to be streaming,
+  which is the one piece of real new code.
+- **All seven honour a byte range**, so a resume point is an exact offset rather
+  than a timestamp converted through a bitrate guess. Episodes run 30–123 MB.
+- **`URL_MAX 320` is not enough any more.** After redirects the final enclosure
+  URL is 559 characters for All-In and **624 for 游庭皓的財經皓角** — both over
+  the radio's bound. It has to grow to 768.
 
-![Three layouts for the SHOWS half](assets/podcast-options.png)
+### Decided: option B, show → episodes → player
 
-Radio is one tap — list, then sound. A podcast has a show *and* an episode, so
-something has to give.
+![The three layouts; B was taken](assets/podcast-options.png)
 
-| | | |
-|---|---|---|
-| **A** | Tap plays the newest episode | One feed fetch, and only on tap. No way to reach an older episode. |
-| **B** | Show → episode list → player | A third state on the tile; header and BACK each eat a row, leaving four episodes. |
-| **C** | One flat list, all shows, newest first | Every feed fetched before a single row can be drawn. |
+A (tap plays the newest) and C (one flat list across all shows) were the other
+two. C was never cheap — every feed fetched before a row can be drawn — and A
+was the recommendation only because it added no navigation state. Rax chose the
+depth.
 
-**A is the recommendation.** It keeps the page the shape it already is, it
-fetches nothing until asked, and it is the only one of the three that adds no
-navigation state to a tile whose buttons already lose presses to the tileview
-(see the scroll-chain finding above). C is the better product and the worse
-gadget: four TLS handshakes on every swipe to page 3, with the list wrong until
-the slowest feed answers. C becomes reasonable only with a cache in NVS and a
-refresh on a timer, which is a larger job than the radio was.
+![Option B, all three levels](assets/podcast-option-b.png)
 
-### The player is not the radio player
+**Seven shows fit because B's rows lose their second line.** Six was the
+radio's limit because a station row carries a genre caption under the name.
+A show row under B is one line, since the episode lives on the next screen:
+seven rows of 36 px with 4 px gaps run from y=105 to y=381, where the circle is
+still 360 px wide against the 330 px row. The radio's own six-row limit is
+unchanged.
 
-![Podcast player beside the shipped radio player](assets/podcast-player.png)
+**Level 2 holds four episodes.** The show-name header and the BACK button each
+cost a row, and a fifth episode would sit at y=432 where the panel has curved
+in to 242 px — narrower than a row. Four is what the circle allows.
 
-A podcast is a fixed thing, so it gets what live radio was denied: position,
-duration, ±30 s, and PAUSE rather than STOP. The tick on the bar is the resume
-point — the byte offset the `206` made exact.
+**Level 3 is the player**, and its BACK returns to the episode list rather than
+to the shows list, which is the one place B costs more than a flag: the page
+now has a two-deep stack where radio had none.
 
 ### Still open
 
-- **Which shows?** The four above are a guess at taste, not a decision. The
-  list is compiled in like the stations, so changing one is a reflash.
 - **One resume point per show in NVS** is a few dozen bytes. Resuming silently
   is the kind thing right up until it resumes something you had finished, so
   the offset probably has to be dropped when it reaches the end.
-- **Refresh when?** Under A, on tap. Whether the row's caption can show the
-  newest episode title *before* you tap is the same problem as C, at one row's
-  scale.
+- **The tileview steals presses from its children** (see the scroll-chain
+  finding above). B adds two more screens of buttons to a page where that was
+  already the one real bug, so every new button needs the same
+  `LV_OBJ_FLAG_SCROLL_CHAIN` treatment.
+- **Nothing refreshes a feed in the background.** Under B the fetch happens when
+  you tap a show, so the first episode list of a session waits on the network.
 
 ## Open questions
 
