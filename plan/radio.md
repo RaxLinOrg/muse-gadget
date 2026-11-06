@@ -1,8 +1,8 @@
 # Internet radio and podcasts
 
-**Status:** radio implemented (MP3 + AAC), podcasts not started
+**Status:** radio implemented (MP3, AAC and HLS), podcasts not started
 **Branch:** `docs/radio-plan`
-**Last updated:** 2026-11-05
+**Last updated:** 2026-11-06
 
 ## Goal
 
@@ -64,7 +64,7 @@ registered with `MUSE_PAGE` and `WHOLE_ARCHIVE`. Off with
 
 | File | What it is |
 |---|---|
-| `muse_radio.c` | the stream: fetch, redirects, ICY demux, MP3/AAC decode, resample, speaker |
+| `muse_radio.c` | the stream: fetch, redirects, HLS, ICY and TS demux, MP3/AAC decode, resample, speaker |
 | `muse_radio_page.c` | the tile: toggle, list, player |
 
 **The type is sized by the CJK font.** Station names are Chinese now, and the
@@ -128,6 +128,25 @@ measurement showed the alternative was four stations that could not play.
 http on the way. `disable_auto_redirect` stays on and the loop re-opens on
 `Location` itself, up to four hops, so the headers that pick the decoder are
 the *final* response's rather than the redirect's.
+
+**HLS, for the last station.** 好事聯播網 publishes a playlist of MPEG-TS
+segments rather than a stream, so there are two more layers: the playlist is
+walked for segments it has not played, and each segment is demuxed — PAT for
+the PMT's pid, PMT for the audio pid and its codec, then PES payloads on that
+pid pushed on while the H.264 video riding alongside is dropped. What comes
+out is the same ADTS AAC the Triton stations send directly, so the decoder
+below it did not change.
+
+**The ring's backpressure is what keeps HLS at the live edge.** A segment is
+475 KB of which only ~60 KB is audio; `push()` blocks while the decoder is
+behind, so a segment downloads at roughly the speed the speaker drains it.
+Nothing schedules this. On joining, it starts one segment back from the end
+so the first is certainly complete, and after a stall it rejoins at the edge
+rather than trying to catch up through segments the station has dropped.
+
+Not implemented, and each would be a silent wrong answer rather than a crash,
+so the demuxer logs instead of guessing: `#EXT-X-KEY` encryption, byte ranges,
+and PAT/PMT sections split across packets. None appears in this stream.
 
 **The page refuses what it cannot play.** Non-200 and any Content-Type
 without `mpeg`/`mp3` in it stop with a reason on screen rather than silence,
@@ -194,14 +213,18 @@ second of both at once at the start of a talk press.
   The four AAC ones were reachable and healthy all along — 200, with
   `icy-metaint: 16000`. They needed a decoder, not a different URL, and they
   have one now. 好事 is the one left out: HLS is a protocol rather than a
-  codec, and nothing here speaks it — *(how: `curl -L` with the firmware's
-  own user agent, then each one played on the board)*.
-- **All five in the table play on the board.** Driven one after another from
+  codec — but it is in too now, over HLS — *(how: `curl -L` with the
+  firmware's own user agent, then each one played on the board)*.
+- **HLS held for 110 seconds without a rebuffer.** About thirteen segments,
+  so segment rollover and playlist re-polling both work, not just the first
+  fetch. The state never left `PLAYING` and nothing was logged — *(how: a
+  soak on station 5 over the console, 2026-11-06)*.
+- **All six in the table play on the board.** Driven one after another from
   the console: ICRT (AAC 48 kHz), 中廣流行網 (AAC 44.1 kHz, with a Chinese
   ICY title on screen), 中廣音樂網 (AAC, `CHRISTOPHER - TULIPS`), 飛碟聯播網
-  (AAC 48 kHz) and 寶島新聲 (MP3 44.1 kHz). Every one reached `PLAYING` with
-  an empty error — *(how: `page=radio:play=<n>` across the table,
-  2026-11-05)*.
+  (AAC 48 kHz), 寶島新聲 (MP3 44.1 kHz) and 好事聯播網 (HLS, AAC 48 kHz on
+  pid 257). Every one reached `PLAYING` with an empty error — *(how:
+  `page=radio:play=<n>` across the table, 2026-11-06)*.
 - **HE-AAC decodes at the station's full rate.** `aac_plus_enable` gives
   48 kHz and 44.1 kHz output rather than the half-rate core, which the
   resampler then takes down to 16 kHz. Worth knowing because the cheaper
@@ -230,12 +253,14 @@ second of both at once at the start of a talk press.
 
 ## Open questions
 
-- **好事聯播網 needs an HLS client.** The only one of Rax's five still
-  missing. That is a playlist to poll and MPEG-TS segments to demux, which is
-  a bigger job than the codec was.
-- **Five rows is now the hard limit.** At 16 px type the list holds five and
-  the sixth runs off the round panel. A longer table needs either scrolling —
-  which the toggle decision was taken to avoid — or shorter rows.
+- **Six rows is the hard limit.** At 16 px type and 48 px rows the list holds
+  six, and that is the round panel's edge. A seventh station needs either
+  scrolling — which the toggle decision was taken to avoid — or a smaller
+  CJK font than the board has.
+- **HLS carries video the board pays for and throws away.** Most of each
+  segment is H.264. It costs download, not CPU, but on a metered link it
+  would matter. An audio-only variant would be the fix if the station
+  published one.
 - **The 1 Hz handover to Muse.** A talk press and the radio overlap for up to
   a second. Cheap to fix properly by hooking the press rather than polling the
   mode, if it grates in use.

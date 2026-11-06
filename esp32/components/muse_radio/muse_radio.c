@@ -43,9 +43,8 @@ static const char *TAG = "radio";
  *
  * Four of these are AAC on Triton/revma, which is why the board has an AAC
  * decoder at all, and why the fetch follows redirects: Triton answers 302
- * with a short-lived token URL. 好事聯播網 is the one that is missing -- it
- * publishes HLS (`.m3u8`), a protocol rather than a codec, and nothing here
- * speaks it.
+ * with a short-lived token URL. 好事聯播網 is HLS, so it arrives as MPEG-TS
+ * segments listed by a playlist, with video riding alongside the audio.
  */
 static const muse_radio_station_t s_stations[] = {
     { "ICRT",           "英語・多元音樂",   "http://n03.rcs.revma.com/x27mfpztxp3vv" },
@@ -53,6 +52,7 @@ static const muse_radio_station_t s_stations[] = {
     { "中廣音樂網",      "音樂・古典",      "https://n03.rcs.revma.com/ndk05tyy2tzuv" },
     { "飛碟聯播網",      "流行・談話節目",   "https://n10.rcs.revma.com/em90w4aeewzuv" },
     { "寶島新聲 FM98.5", "台語・華語流行",   "http://125.227.87.206:8000/FM98.5" },
+    { "好事聯播網 港都983", "高雄・在地音樂",  "http://202.39.43.67:1935/live/RA000012/chunklist.m3u8" },
 };
 #define STATIONS ((int)(sizeof(s_stations) / sizeof(s_stations[0])))
 
@@ -67,6 +67,10 @@ static const muse_radio_station_t s_stations[] = {
 #define AAC_HOLD 1600            /* comfortably over an ADTS frame at these rates */
 #define PCM_MAX 4096             /* samples: an HE-AAC frame is 2048 x 2 ch */
 #define MAX_HOPS 4
+#define PLAYLIST_MAX 3072
+#define URL_MAX 320
+#define TS_PACKET 188
+#define SEG_POLL_MS 3000
 #define META_MAX 512             /* of an ICY block; longer titles are cut */
 #define TITLE_MAX 96
 #define SEND_WAIT_MS 200
@@ -250,8 +254,21 @@ typedef struct {
     bool typed;
     bool mp3;
     bool aac;
+    bool hls;
     char location[LOCATION_MAX];
 } hdrs_t;
+
+/* strcasestr is a GNU extension, so: haystack contains needle, ignoring case. */
+static bool has_ci(const char *hay, const char *needle)
+{
+    size_t n = strlen(needle);
+    for (; *hay; hay++) {
+        if (!strncasecmp(hay, needle, n)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 static esp_err_t on_header(esp_http_client_event_t *e)
 {
@@ -266,10 +283,346 @@ static esp_err_t on_header(esp_http_client_event_t *e)
         h->typed = true;
         h->mp3 = strstr(e->header_value, "mpeg") || strstr(e->header_value, "mp3");
         h->aac = strstr(e->header_value, "aac") != NULL;
+        /* application/vnd.apple.mpegurl, audio/mpegurl, application/x-mpegURL */
+        h->hls = has_ci(e->header_value, "mpegurl");
     } else if (!strcasecmp(e->header_key, "Location")) {
         snprintf(h->location, sizeof(h->location), "%s", e->header_value);
     }
     return ESP_OK;
+}
+
+/* -------------------------------------------------------------------- HLS */
+
+/*
+ * 好事聯播網 publishes HLS rather than a plain stream, so there are two more
+ * layers between the socket and the decoder: a playlist that lists segments,
+ * and MPEG-TS segments that carry the audio alongside video this board has no
+ * use for. Both are small, and what comes out the far end is the same ADTS
+ * AAC the Triton stations send directly -- so only the plumbing is new.
+ *
+ * What this does not do: encryption (#EXT-X-KEY), byte ranges, and PAT/PMT
+ * tables split across packets. None appear in the stream this was built for,
+ * and each would be a silent wrong answer rather than a crash, so the demuxer
+ * says so in the log instead of guessing.
+ */
+typedef struct {
+    uint8_t pkt[TS_PACKET];
+    size_t have;
+    int pmt_pid;
+    int audio_pid;
+    bool announced;
+} ts_t;
+
+/* The PMT names the elementary streams; we want the audio one and its codec. */
+static void ts_read_pmt(ts_t *ts, const uint8_t *sec, size_t len)
+{
+    if (len < 12) {
+        return;
+    }
+    size_t slen = (size_t)((sec[1] & 0x0f) << 8 | sec[2]);
+    size_t info_len = (size_t)((sec[10] & 0x0f) << 8 | sec[11]);
+    size_t q = 12 + info_len;
+    size_t end = 3 + slen - 4;   /* less the CRC */
+    if (end > len) {
+        end = len;
+    }
+    while (q + 5 <= end) {
+        int type = sec[q];
+        int pid = (sec[q + 1] & 0x1f) << 8 | sec[q + 2];
+        size_t es_len = (size_t)((sec[q + 3] & 0x0f) << 8 | sec[q + 4]);
+        if (type == 0x0f || type == 0x11) {        /* AAC, ADTS or LATM */
+            ts->audio_pid = pid;
+            s_is_aac = true;
+        } else if (type == 0x03 || type == 0x04) { /* MPEG-1/2 audio */
+            ts->audio_pid = pid;
+            s_is_aac = false;
+        }
+        q += 5 + es_len;
+    }
+    if (ts->audio_pid >= 0 && !ts->announced) {
+        ts->announced = true;
+        ESP_LOGI(TAG, "HLS: %s on pid %d", s_is_aac ? "AAC" : "MP3", ts->audio_pid);
+    }
+}
+
+/* One 188-byte packet: tables are read, audio is forwarded, video is dropped. */
+static bool ts_packet(ts_t *ts, const uint8_t *p, uint32_t epoch)
+{
+    if (p[0] != 0x47 || (p[1] & 0x80)) {
+        return true;   /* not a packet, or flagged as corrupt: skip it */
+    }
+    int pid = (p[1] & 0x1f) << 8 | p[2];
+    bool pusi = (p[1] & 0x40) != 0;
+    int afc = (p[3] >> 4) & 3;
+    size_t off = 4;
+    if (afc & 2) {                       /* adaptation field */
+        off += 1 + p[off];
+    }
+    if (!(afc & 1) || off >= TS_PACKET) {
+        return true;                     /* no payload */
+    }
+    if (pid == 0 || pid == ts->pmt_pid) {
+        size_t q = off;
+        if (pusi) {
+            q += 1 + p[q];               /* pointer_field */
+        }
+        if (q + 12 > TS_PACKET) {
+            return true;
+        }
+        if (pid == 0) {
+            /* First program in the PAT is the one we take. */
+            ts->pmt_pid = (p[q + 10] & 0x1f) << 8 | p[q + 11];
+        } else {
+            ts_read_pmt(ts, p + q, TS_PACKET - q);
+        }
+        return true;
+    }
+    if (pid != ts->audio_pid) {
+        return true;                     /* video, metadata, padding */
+    }
+    if (pusi) {
+        /* Step over the PES header to the elementary bytes. */
+        if (off + 9 > TS_PACKET || p[off] || p[off + 1] || p[off + 2] != 1) {
+            return true;
+        }
+        off += 9 + p[off + 8];
+        if (off >= TS_PACKET) {
+            return true;
+        }
+    }
+    return push(p + off, TS_PACKET - off, epoch);
+}
+
+/* HTTP reads land wherever they land, so packets are reassembled here. */
+static bool ts_feed(ts_t *ts, const uint8_t *data, size_t n, uint32_t epoch)
+{
+    while (n) {
+        if (!ts->have && *data != 0x47) {
+            data++;                      /* resync */
+            n--;
+            continue;
+        }
+        size_t want = TS_PACKET - ts->have;
+        size_t take = want < n ? want : n;
+        memcpy(ts->pkt + ts->have, data, take);
+        ts->have += take;
+        data += take;
+        n -= take;
+        if (ts->have == TS_PACKET) {
+            ts->have = 0;
+            if (!ts_packet(ts, ts->pkt, epoch)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/* GET a whole small body (a playlist). Returns its length, or -1. */
+static int fetch_text(esp_http_client_handle_t c, const char *url, char *out, size_t cap)
+{
+    int got = 0;
+    if (esp_http_client_set_url(c, url) != ESP_OK || esp_http_client_open(c, 0) != ESP_OK) {
+        return -1;
+    }
+    if (esp_http_client_fetch_headers(c) < 0 || esp_http_client_get_status_code(c) != 200) {
+        esp_http_client_close(c);
+        return -1;
+    }
+    while ((size_t)got < cap - 1) {
+        int n = esp_http_client_read(c, out + got, (int)(cap - 1 - (size_t)got));
+        if (n <= 0) {
+            break;
+        }
+        got += n;
+    }
+    out[got] = '\0';
+    esp_http_client_close(c);
+    return got;
+}
+
+/* Resolves `name` against the playlist URL it came from. */
+static void resolve(const char *base, const char *name, char *out, size_t cap)
+{
+    if (strstr(name, "://")) {
+        snprintf(out, cap, "%s", name);
+        return;
+    }
+    const char *slash = strrchr(base, '/');
+    size_t n = slash ? (size_t)(slash - base) : strlen(base);
+    snprintf(out, cap, "%.*s/%s", (int)n, base, name);
+}
+
+/* The nth line of the playlist that is not a comment, and its sequence. */
+static const char *playlist_segment(const char *text, int64_t want, int64_t first,
+                                    char *name, size_t cap)
+{
+    int64_t seq = first;
+    for (const char *p = text; *p; ) {
+        const char *eol = strchr(p, '\n');
+        size_t len = eol ? (size_t)(eol - p) : strlen(p);
+        while (len && (p[len - 1] == '\r' || p[len - 1] == ' ')) {
+            len--;
+        }
+        if (len && *p != '#') {
+            if (seq == want) {
+                snprintf(name, cap, "%.*s", (int)len, p);
+                return name;
+            }
+            seq++;
+        }
+        if (!eol) {
+            break;
+        }
+        p = eol + 1;
+    }
+    return NULL;
+}
+
+static int64_t playlist_first(const char *text)
+{
+    const char *p = strstr(text, "#EXT-X-MEDIA-SEQUENCE:");
+    return p ? strtoll(p + strlen("#EXT-X-MEDIA-SEQUENCE:"), NULL, 10) : 0;
+}
+
+/* Counts the segments a playlist lists, so we know where its live edge is. */
+static int64_t playlist_count(const char *text)
+{
+    int64_t n = 0;
+    for (const char *p = text; *p; ) {
+        const char *eol = strchr(p, '\n');
+        size_t len = eol ? (size_t)(eol - p) : strlen(p);
+        while (len && (p[len - 1] == '\r' || p[len - 1] == ' ')) {
+            len--;
+        }
+        if (len && *p != '#') {
+            n++;
+        }
+        if (!eol) {
+            break;
+        }
+        p = eol + 1;
+    }
+    return n;
+}
+
+/* Streams one segment through the demuxer. */
+static bool fetch_segment(esp_http_client_handle_t c, const char *url, ts_t *ts,
+                          uint8_t *chunk, uint32_t epoch)
+{
+    if (esp_http_client_set_url(c, url) != ESP_OK || esp_http_client_open(c, 0) != ESP_OK) {
+        return false;
+    }
+    bool ok = true;
+    if (esp_http_client_fetch_headers(c) < 0 || esp_http_client_get_status_code(c) != 200) {
+        ok = false;
+    }
+    while (ok && epoch == s_epoch) {
+        int n = esp_http_client_read(c, (char *)chunk, READ_CHUNK);
+        if (n < 0) {
+            ok = false;
+            break;
+        }
+        if (!n) {
+            break;                       /* segment done */
+        }
+        if (!ts_feed(ts, chunk, (size_t)n, epoch)) {
+            ok = false;                  /* cancelled */
+        }
+    }
+    esp_http_client_close(c);
+    return ok;
+}
+
+/*
+ * Walks the playlist for as long as the station is tuned. Each pass takes the
+ * segments it has not played yet; with none, it waits and asks again. The
+ * ring's backpressure is what paces this: a segment only downloads as fast as
+ * the speaker drains its audio, which is what keeps us at the live edge.
+ */
+static void hls_loop(esp_http_client_handle_t c, const char *url, uint32_t epoch)
+{
+    char *text = heap_caps_malloc(PLAYLIST_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    char *seg_url = heap_caps_malloc(URL_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    char *list_url = heap_caps_malloc(URL_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    char *name = heap_caps_malloc(URL_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    uint8_t *chunk = heap_caps_malloc(READ_CHUNK, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    ts_t *ts = heap_caps_calloc(1, sizeof(ts_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    int64_t next = -1;
+
+    if (!text || !seg_url || !list_url || !name || !chunk || !ts) {
+        s_status = "OUT OF MEMORY";
+        goto done;
+    }
+    ts->pmt_pid = -1;
+    ts->audio_pid = -1;
+    snprintf(list_url, URL_MAX, "%s", url);
+
+    if (fetch_text(c, list_url, text, PLAYLIST_MAX) < 0) {
+        s_status = "NO PLAYLIST";
+        goto done;
+    }
+    /* A master playlist lists variants rather than segments; take the first. */
+    if (strstr(text, "#EXT-X-STREAM-INF")) {
+        if (!playlist_segment(text, 0, 0, name, URL_MAX)) {
+            s_status = "EMPTY PLAYLIST";
+            goto done;
+        }
+        resolve(list_url, name, seg_url, URL_MAX);
+        snprintf(list_url, URL_MAX, "%s", seg_url);
+        ESP_LOGI(TAG, "HLS: variant %s", list_url);
+        if (fetch_text(c, list_url, text, PLAYLIST_MAX) < 0) {
+            s_status = "NO PLAYLIST";
+            goto done;
+        }
+    }
+
+    while (epoch == s_epoch) {
+        int64_t first = playlist_first(text);
+        int64_t count = playlist_count(text);
+        if (count <= 0) {
+            s_status = "EMPTY PLAYLIST";
+            goto done;
+        }
+        if (next < 0 || next < first) {
+            /* Join near the live edge, one segment back so the first one is
+             * certainly complete; and after a stall, rejoin rather than try to
+             * catch up through segments the station has already dropped. */
+            next = first + count - 2;
+            if (next < first) {
+                next = first;
+            }
+        }
+        while (next < first + count && epoch == s_epoch) {
+            if (!playlist_segment(text, next, first, name, URL_MAX)) {
+                break;
+            }
+            resolve(list_url, name, seg_url, URL_MAX);
+            if (!fetch_segment(c, seg_url, ts, chunk, epoch)) {
+                if (epoch != s_epoch) {
+                    goto done;
+                }
+                ESP_LOGW(TAG, "segment %lld failed", (long long)next);
+            }
+            next++;
+        }
+        if (epoch != s_epoch) {
+            goto done;
+        }
+        /* Nothing new yet: the station publishes a segment at a time. */
+        vTaskDelay(pdMS_TO_TICKS(SEG_POLL_MS));
+        if (fetch_text(c, list_url, text, PLAYLIST_MAX) < 0) {
+            s_status = "PLAYLIST GONE";
+            goto done;
+        }
+    }
+done:
+    free(text);
+    free(seg_url);
+    free(list_url);
+    free(name);
+    free(chunk);
+    free(ts);
 }
 
 static void net_task(void *arg)
@@ -288,12 +641,16 @@ static void net_task(void *arg)
     };
     hdrs_t hdrs = { 0 };
     esp_http_client_handle_t c = NULL;
+    /* Relative segment names resolve against the playlist's *final* URL, so
+     * the redirect loop keeps it rather than the one in the table. */
+    char *final_url = heap_caps_malloc(URL_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     int status = 0;
 
-    if (!st || !chunk || !icy) {
+    if (!st || !chunk || !icy || !final_url) {
         s_status = "OUT OF MEMORY";
         goto out;
     }
+    snprintf(final_url, URL_MAX, "%s", st->url);
     cfg.url = st->url;
     cfg.user_data = &hdrs;
     c = esp_http_client_init(&cfg);
@@ -336,6 +693,7 @@ static void net_task(void *arg)
             s_status = "BAD REDIRECT";
             goto out;
         }
+        snprintf(final_url, URL_MAX, "%s", hdrs.location);
         hdrs.location[0] = '\0';
         hdrs.typed = false;
     }
@@ -344,11 +702,21 @@ static void net_task(void *arg)
         s_status = status == 404 ? "STATION GONE" : "STATION REFUSED US";
         goto out;
     }
-    /* MP3 and AAC are what the board decodes. Ogg and HLS are not, and either
-     * would otherwise be silence with no explanation. */
-    if (hdrs.typed && !hdrs.mp3 && !hdrs.aac) {
+    /* MP3 and AAC are what the board decodes, and HLS carries one of the two
+     * inside MPEG-TS. Ogg is not, and would otherwise be silence with no
+     * explanation. */
+    if (hdrs.typed && !hdrs.mp3 && !hdrs.aac && !hdrs.hls) {
         ESP_LOGW(TAG, "unplayable Content-Type");
         s_status = "UNPLAYABLE STREAM";
+        goto out;
+    }
+    if (hdrs.hls) {
+        /* The playlist's body is of no use unread; hls_loop drives the same
+         * handle itself, a request at a time. Its codec comes from the PMT,
+         * not from these headers. */
+        esp_http_client_close(c);
+        ESP_LOGI(TAG, "%s: HLS", st->name);
+        hls_loop(c, final_url, epoch);
         goto out;
     }
     s_is_aac = hdrs.aac;
@@ -380,6 +748,7 @@ out:
     }
     free(chunk);
     free(icy);
+    free(final_url);
     if (epoch == s_epoch) {
         s_net_live = false;
     }
