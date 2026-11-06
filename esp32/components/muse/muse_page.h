@@ -99,6 +99,16 @@ typedef struct {
 void muse_page_register(const muse_page_t *page);
 
 /*
+ * unscii-16 with the board's CJK fallback behind it, where the board builds
+ * one (CONFIG_MUSE_CJK_FONT). That fallback is a 16 px cell, so this is as
+ * large as CJK text can be drawn; ASCII-only chrome can go bigger on its own.
+ * A page showing text that may not be ASCII -- a station name, a city --
+ * should take this rather than &lv_font_unscii_16, or the glyphs come out
+ * blank.
+ */
+const lv_font_t *muse_page_caption_font(void);
+
+/*
  * The pages that got a tile, for the settings list to walk. Valid once the
  * screen is built; before that the count is zero.
  */

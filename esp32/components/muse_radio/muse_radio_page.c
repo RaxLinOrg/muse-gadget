@@ -41,11 +41,19 @@
 #define COLOR_PANEL   0x140f22
 #define COLOR_WARN    0xffd060
 
-#define ROW_W 340
-#define ROW_H 52
-#define Y_TOGGLE (-168)
-#define PILL_W 92
-#define PILL_H 30
+/*
+ * Sizes are set by the CJK font: its cell is 16 px, so a station name in
+ * Chinese cannot be drawn smaller or larger than that, and the rows are built
+ * around it. Four rows fit at this height; a fifth would run off the round
+ * panel's edge.
+ */
+#define ROW_W 330
+#define ROW_H 64
+#define Y_TOGGLE (-166)
+#define PILL_W 112
+#define PILL_H 38
+#define BTN_W 180
+#define BTN_H 52
 
 static lv_obj_t *s_list_view, *s_player_view;
 static lv_obj_t *s_pill_radio, *s_pill_shows;
@@ -195,8 +203,9 @@ static lv_obj_t *pill(lv_obj_t *parent, const char *text, int16_t dx, bool shows
     lv_obj_t *p = panel(parent, PILL_W, PILL_H, PILL_H / 2);
     lv_obj_align(p, LV_ALIGN_CENTER, dx, Y_TOGGLE);
     lv_obj_add_flag(p, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(p, LV_OBJ_FLAG_SCROLL_CHAIN);   /* as the buttons, below */
     lv_obj_add_event_cb(p, on_pill, LV_EVENT_CLICKED, (void *)(intptr_t)shows);
-    lv_obj_t *l = label(p, &lv_font_unscii_8, COLOR_DIM, 0, 0);
+    lv_obj_t *l = label(p, &lv_font_unscii_16, COLOR_DIM, 0, 0);
     lv_obj_set_style_text_letter_space(l, 2, 0);
     lv_label_set_text(l, text);
     return p;
@@ -205,15 +214,24 @@ static lv_obj_t *pill(lv_obj_t *parent, const char *text, int16_t dx, bool shows
 static lv_obj_t *button(lv_obj_t *parent, const char *text, uint32_t color,
                         int16_t dy, lv_event_cb_t cb)
 {
-    lv_obj_t *b = panel(parent, 140, 40, 20);
+    lv_obj_t *b = panel(parent, BTN_W, BTN_H, BTN_H / 2);
     lv_obj_set_style_bg_color(b, lv_color_hex(COLOR_PANEL), 0);
     lv_obj_set_style_border_color(b, lv_color_hex(color), 0);
-    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_border_width(b, 2, 0);
     lv_obj_set_style_border_opa(b, LV_OPA_COVER, 0);
     lv_obj_align(b, LV_ALIGN_CENTER, 0, dy);
     lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+    /*
+     * The tile is a tileview, which scrolls. A press that drifts more than the
+     * indev's scroll limit hands the gesture to the tileview, the button gets
+     * PRESS_LOST and no CLICKED ever arrives -- which is why STOP and BACK
+     * worked only sometimes. Breaking the scroll chain at the button keeps the
+     * press. The cost is that a swipe *started on a button* no longer turns
+     * the page; starting it anywhere else still does.
+     */
+    lv_obj_remove_flag(b, LV_OBJ_FLAG_SCROLL_CHAIN);
     lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *l = label(b, &lv_font_unscii_8, color, 0, 0);
+    lv_obj_t *l = label(b, &lv_font_unscii_16, color, 0, 0);
     lv_obj_set_style_text_letter_space(l, 2, 0);
     lv_label_set_text(l, text);
     return b;
@@ -240,13 +258,12 @@ static void build_list(lv_obj_t *parent)
         lv_obj_add_flag(s_row[i], LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(s_row[i], on_row, LV_EVENT_CLICKED, (void *)(intptr_t)i);
 
-        s_row_name[i] = label(s_row[i], &lv_font_unscii_8, COLOR_LIT, 0, -9);
-        lv_obj_align(s_row_name[i], LV_ALIGN_LEFT_MID, 16, -9);
-        lv_obj_set_style_text_letter_space(s_row_name[i], 1, 0);
+        s_row_name[i] = label(s_row[i], muse_page_caption_font(), COLOR_LIT, 0, -13);
+        lv_obj_align(s_row_name[i], LV_ALIGN_LEFT_MID, 16, -13);
         lv_label_set_text(s_row_name[i], st->name);
 
-        s_row_genre[i] = label(s_row[i], &lv_font_unscii_8, COLOR_DIM, 0, 10);
-        lv_obj_align(s_row_genre[i], LV_ALIGN_LEFT_MID, 16, 10);
+        s_row_genre[i] = label(s_row[i], muse_page_caption_font(), COLOR_DIM, 0, 13);
+        lv_obj_align(s_row_genre[i], LV_ALIGN_LEFT_MID, 16, 13);
         lv_label_set_text(s_row_genre[i], st->genre);
 
         s_row_mark[i] = label(s_row[i], &lv_font_unscii_16, COLOR_ACCENT, 0, 0);
@@ -258,32 +275,31 @@ static void build_list(lv_obj_t *parent)
     lv_obj_remove_flag(s_empty, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(s_empty, ROW_W, 120);
     lv_obj_align(s_empty, LV_ALIGN_CENTER, 0, 10);
-    lv_obj_t *l = label(s_empty, &lv_font_unscii_8, COLOR_DIM, 0, -12);
+    lv_obj_t *l = label(s_empty, &lv_font_unscii_16, COLOR_DIM, 0, -14);
     lv_obj_set_style_text_letter_space(l, 2, 0);
     lv_label_set_text(l, "NO SHOWS YET");
-    lv_obj_t *c = label(s_empty, &lv_font_unscii_8, COLOR_DIM, 0, 14);
-    lv_label_set_text(c, "PODCASTS COME AFTER RADIO");
+    lv_obj_t *c = label(s_empty, &lv_font_unscii_16, COLOR_DIM, 0, 16);
+    lv_label_set_text(c, "PODCASTS COME LATER");
     lv_obj_add_flag(s_empty, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void build_player(lv_obj_t *parent)
 {
-    s_now_name = label(parent, &lv_font_unscii_16, COLOR_LIT, 0, -92);
-    lv_obj_set_style_text_letter_space(s_now_name, 1, 0);
-    s_now_genre = label(parent, &lv_font_unscii_8, COLOR_DIM, 0, -64);
+    s_now_name = label(parent, muse_page_caption_font(), COLOR_LIT, 0, -110);
+    s_now_genre = label(parent, muse_page_caption_font(), COLOR_DIM, 0, -80);
 
-    s_now_state = label(parent, &lv_font_unscii_8, COLOR_ACCENT, 0, -24);
+    s_now_state = label(parent, &lv_font_unscii_16, COLOR_ACCENT, 0, -34);
     lv_obj_set_style_text_letter_space(s_now_state, 3, 0);
 
     /* An ICY title is as long as the station feels like making it, so it
      * scrolls rather than widening the page. */
-    s_now_title = label(parent, &lv_font_unscii_8, COLOR_CAPTION, 0, 8);
-    lv_obj_set_width(s_now_title, 300);
+    s_now_title = label(parent, muse_page_caption_font(), COLOR_CAPTION, 0, 6);
+    lv_obj_set_width(s_now_title, 320);
     lv_label_set_long_mode(s_now_title, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
     lv_obj_set_style_text_align(s_now_title, LV_TEXT_ALIGN_CENTER, 0);
 
-    button(parent, "STOP", COLOR_ACCENT, 62, on_stop);
-    button(parent, "BACK", COLOR_DIM, 112, on_back);
+    button(parent, "STOP", COLOR_ACCENT, 70, on_stop);
+    button(parent, "BACK", COLOR_DIM, 132, on_back);
 }
 
 static void build(lv_obj_t *tile)

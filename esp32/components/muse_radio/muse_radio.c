@@ -38,11 +38,15 @@ static const char *TAG = "radio";
 /*
  * Every URL here was checked by hand for a 200 and an `audio/mpeg`
  * Content-Type, because there is no AAC or Ogg decoder on the board and a
- * station that answers either would just be silence. plan/radio.md records
- * the measurement, the stations that failed, and why none of them is
- * Taiwanese.
+ * station that answers either would be silence with no explanation.
+ *
+ * Rax asked for five Taiwanese stations on 2026-11-05. Only this one is MP3:
+ * ICRT, 中廣流行網, 中廣音樂網 and 飛碟 are all AAC on Triton/revma, and
+ * 好事聯播網 is HLS. They are reachable and they send ICY metadata -- they
+ * need a decoder, not a different URL. plan/radio.md has the measurement.
  */
 static const muse_radio_station_t s_stations[] = {
+    { "寶島新聲 FM98.5", "台語・華語流行", "http://125.227.87.206:8000/FM98.5" },
     { "BBC WORLD SERVICE", "NEWS - ENGLISH", "https://stream.live.vc.bbcmedia.co.uk/bbc_world_service" },
     { "RADIO PARADISE",    "ECLECTIC MIX",   "https://stream.radioparadise.com/mp3-128" },
     { "FRANCE INTER",      "TALK - FRANCAIS", "https://icecast.radiofrance.fr/franceinter-midfi.mp3" },

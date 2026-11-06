@@ -67,6 +67,22 @@ registered with `MUSE_PAGE` and `WHOLE_ARCHIVE`. Off with
 | `muse_radio.c` | the stream: HTTPS fetch, ICY demux, minimp3, resample, speaker |
 | `muse_radio_page.c` | the tile: toggle, list, player |
 
+**The type is sized by the CJK font.** Station names are Chinese now, and the
+board's CJK fallback (`CONFIG_MUSE_CJK_FONT`, Unifont) is a 16 px cell — so
+16 px is both the floor and the ceiling for anything that might not be ASCII.
+The page was built at `unscii_8`, which is why it read as too small; it is
+now 16 px throughout, which also forced the rows from 52 px to 64 px and the
+list from five rows to four. `muse_page_caption_font()` was added to
+`muse_page.h` so a page can reach the fallback font the UI already builds.
+
+**STOP and BACK broke the scroll chain.** The tile is a tileview, which
+scrolls. A press that drifts past the indev's scroll limit hands the gesture
+to the tileview; the button gets `PRESS_LOST` and `LV_EVENT_CLICKED` never
+arrives — which is exactly "sometimes not working when clicked". Clearing
+`LV_OBJ_FLAG_SCROLL_CHAIN` on the buttons and the toggle pills keeps the
+press on the button. The cost is that a swipe *started on* one of them no
+longer turns the page.
+
 **Radio only.** SHOWS is the empty state the toggle was chosen to make
 possible — "NO SHOWS YET / PODCASTS COME AFTER RADIO". Nothing moves when the
 RSS half arrives.
@@ -120,9 +136,8 @@ second of both at once at the start of a talk press.
   those two routes specifically are refused. [vm-config.md](vm-config.md) has
   the measurement and the code is on `feat/vm-config` — *(how: a bench build
   on the board, over a live session)*.
-- **Only three of eight candidate streams are usable, and none is
-  Taiwanese.** Every URL was checked with `curl -I -H 'Icy-MetaData: 1'`
-  before any was compiled in:
+- **Only three of eight first-pass candidate streams were usable.** Every URL
+  was checked with `curl -I -H 'Icy-MetaData: 1'` before any was compiled in:
 
   | Stream | Code | Content-Type | `icy-metaint` |
   |---|---|---|---|
@@ -135,14 +150,37 @@ second of both at once at the start of a talk press.
   | **ICRT** | **403** | text/html | — |
   | Radio.co (revma) | 302 → 200 | audio/aac | 16000 |
 
-  Three things follow. AAC and Ogg are common and there is no decoder for
-  either, so the table is MP3-only and the page checks Content-Type. **ICRT
-  403s from this network**, and the gadget is on the same Wi-Fi, so shipping
-  it as a default would ship a station that cannot work — the Taiwanese
-  stations are absent for that reason, not by choice. And ICY metadata is
-  real but not universal: France Inter sends none, so the now-playing line
-  has to be empty rather than guessed — *(how: `curl` from this machine,
-  2026-11-05)*.
+  Two things follow. AAC and Ogg are common and there is no decoder for
+  either, so the table is MP3-only and the page checks Content-Type. And ICY
+  metadata is real but not universal: France Inter sends none, so the
+  now-playing line has to be empty rather than guessed — *(how: `curl` from
+  this machine, 2026-11-05)*. The ICRT line here is superseded by the
+  finding below: that was the wrong URL.
+- **Four of the five Taiwanese stations Rax asked for need a decoder this
+  board does not have.** Asked on 2026-11-05 for ICRT, 中廣, 飛碟, 好事 and
+  寶島新聲 as the defaults. Every one was looked up in the
+  [radio-browser](https://www.radio-browser.info/) directory and then probed
+  directly:
+
+  | Station | Code | Format | Usable today |
+  |---|---|---|---|
+  | 寶島新聲 FM98.5 | 200 | **audio/mpeg**, 64 kbps | **yes** |
+  | ICRT | 302 → 200 | audio/aac | no decoder |
+  | 中廣流行網 | 302 → 200 | audio/aac | no decoder |
+  | 中廣音樂網 | 302 → 200 | audio/aac | no decoder |
+  | 飛碟電台 | 302 → 200 | audio/aac | no decoder |
+  | 飛碟 南台灣之聲 | 200 | audio/aac | no decoder |
+  | 好事聯播網 港都983 | 200 | `application/vnd.apple.mpegurl` | HLS, not a stream |
+
+  The four AAC ones are **reachable and healthy** — they answer 200 and send
+  `icy-metaint: 16000`. They need an AAC decoder, not a different URL. 好事
+  needs an HLS client as well, which is a protocol rather than a codec.
+  Only 寶島新聲 is in the firmware — *(how: `curl -L` with the firmware's own
+  user agent, 2026-11-05)*.
+- **The earlier "ICRT can't be reached from this network" was wrong.** It was
+  measured against `live.leanstream.co`, which 403s for everyone. ICRT's
+  Triton/revma stream answers 200 from here. What rules ICRT out is the
+  codec, not the network.
 - **Rebuffering is not an edge case.** A 16 kHz stream over a weak link
   stalls; this board logged `rssi -86` and three join attempts on an ordinary
   evening. The stalled state is drawn because it will be seen often: the
@@ -163,6 +201,11 @@ second of both at once at the start of a talk press.
 
 ## Open questions
 
+- **An AAC decoder?** It is the one thing standing between this page and the
+  stations Rax actually wants. `espressif/esp_audio_codec` is on the
+  component registry (2.6.2) and decodes AAC, but it is a binary component
+  under Espressif's own licence, and it would mean a second decode path and
+  following the 302 that Triton answers with. Not started; Rax's call.
 - **The 1 Hz handover to Muse.** A talk press and the radio overlap for up to
   a second. Cheap to fix properly by hooking the press rather than polling the
   mode, if it grates in use.
