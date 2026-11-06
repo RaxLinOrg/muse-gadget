@@ -1,6 +1,7 @@
 # Internet radio and podcasts
 
-**Status:** radio implemented (MP3, AAC and HLS), podcasts not started
+**Status:** radio implemented (MP3, AAC and HLS); podcasts measured and
+mocked up, waiting on a decision
 **Branch:** `docs/radio-plan`
 **Last updated:** 2026-11-06
 
@@ -250,6 +251,80 @@ second of both at once at the start of a talk press.
 - **Podcasts cost much more than radio.** Radio is a URL. A podcast is an RSS
   feed to parse (XML on an ESP32), an episode list to hold, and a resume
   position per show in NVS. Same tile, but not the same size of job.
+
+## Podcasts: the SHOWS half
+
+**Not built. Mocked up 2026-11-06 for a decision**
+(<https://claude.ai/artifact/XMLK42mbxoMfv4eHtp62Rp>).
+
+Four real Taiwanese feeds were fetched before anything was drawn, the same way
+the stations were probed before they were compiled in. What came back decides
+most of the layout.
+
+| Show | Feed XML | Items | Newest | Audio |
+|---|---|---|---|---|
+| Gooaye 股癌 | 3.2 MB | 711 | 49.6 min | MP3, 49 MB, ~132 kbps |
+| 百靈果 News | 10.4 MB | 1104 | 80.8 min | MP3 |
+| 台灣通勤第一品牌 | 1.8 MB | 597 | 53.8 min | MP3 |
+| 聽天下：天下雜誌 | 22.8 MB | 4857 | 31.7 min | MP3 |
+
+*(how: `curl -L -A 'muse-gadget/1.0'` on each feed, URLs from the iTunes lookup
+API; enclosure probed with `curl -I -r 0-1 -L`.)*
+
+- **Every enclosure is MP3.** The AAC decoder and the TS demuxer the radio
+  needed sit this one out — podcasts land on the minimp3 path that already
+  works.
+- **A feed is up to 22 MB of XML and the board has 2.7 MB of free PSRAM**, so
+  it can never be held whole. But items are newest-first, so a parser that
+  stops after five `<item>` elements reads about 10 KB and closes the socket.
+  The size stops mattering the moment the parse is streaming — and it must be
+  streaming, which is the one piece of real new code.
+- **Resume can be exact rather than estimated.** A ranged request on 股癌's
+  enclosure answered `206` with `content-range: bytes 0-1/49081287`. So the
+  gadget stores the *byte offset* it stopped at and asks for that, with no
+  bitrate guess and no drift on a variable-rate file.
+- **One redirect, a 148-character URL.** Inside the existing `MAX_HOPS 4` and
+  `URL_MAX 320`. Nothing in the fetch path has to grow.
+
+### The decision in front of us: how deep does SHOWS go?
+
+![Three layouts for the SHOWS half](assets/podcast-options.png)
+
+Radio is one tap — list, then sound. A podcast has a show *and* an episode, so
+something has to give.
+
+| | | |
+|---|---|---|
+| **A** | Tap plays the newest episode | One feed fetch, and only on tap. No way to reach an older episode. |
+| **B** | Show → episode list → player | A third state on the tile; header and BACK each eat a row, leaving four episodes. |
+| **C** | One flat list, all shows, newest first | Every feed fetched before a single row can be drawn. |
+
+**A is the recommendation.** It keeps the page the shape it already is, it
+fetches nothing until asked, and it is the only one of the three that adds no
+navigation state to a tile whose buttons already lose presses to the tileview
+(see the scroll-chain finding above). C is the better product and the worse
+gadget: four TLS handshakes on every swipe to page 3, with the list wrong until
+the slowest feed answers. C becomes reasonable only with a cache in NVS and a
+refresh on a timer, which is a larger job than the radio was.
+
+### The player is not the radio player
+
+![Podcast player beside the shipped radio player](assets/podcast-player.png)
+
+A podcast is a fixed thing, so it gets what live radio was denied: position,
+duration, ±30 s, and PAUSE rather than STOP. The tick on the bar is the resume
+point — the byte offset the `206` made exact.
+
+### Still open
+
+- **Which shows?** The four above are a guess at taste, not a decision. The
+  list is compiled in like the stations, so changing one is a reflash.
+- **One resume point per show in NVS** is a few dozen bytes. Resuming silently
+  is the kind thing right up until it resumes something you had finished, so
+  the offset probably has to be dropped when it reaches the end.
+- **Refresh when?** Under A, on tap. Whether the row's caption can show the
+  newest episode title *before* you tap is the same problem as C, at one row's
+  scale.
 
 ## Open questions
 
