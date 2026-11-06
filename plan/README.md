@@ -12,7 +12,7 @@ after a week does not mean re-deriving it.
 | [status-row.md](status-row.md) | The first page's status row | working | on `main` |
 | [battery.md](battery.md) | Battery icon on the first page | working | on `main` |
 | [music.md](music.md) | Music on the gadget | blocked | nothing built |
-| [radio.md](radio.md) | Internet radio and podcasts | mockup only | nothing built |
+| [radio.md](radio.md) | Internet radio and podcasts | radio works, podcasts not started | `docs/radio-plan` |
 | [vm-config.md](vm-config.md) | Settings kept on the user's VM | blocked | `feat/vm-config` |
 
 ## Conventions
