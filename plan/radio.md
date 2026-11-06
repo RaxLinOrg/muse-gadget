@@ -1,6 +1,8 @@
 # Internet radio and podcasts
 
-**Status:** radio implemented (MP3, AAC and HLS), podcasts not started
+**Status:** radio implemented (MP3, AAC and HLS), now at 24 px in a
+scrolling list; podcasts implemented too — option B, seven shows, four
+episodes each, with a resume point per show in NVS
 **Branch:** `docs/radio-plan`
 **Last updated:** 2026-11-06
 
@@ -31,6 +33,9 @@ player with a live ICY title on it:
 ![The SHOWS half, empty until podcasts exist](assets/radio-shipped-shows.png)
 
 ![The player, on air, with the track the station sent](assets/radio-shipped-player.png)
+
+That empty SHOWS half is now filled; the three screens behind it are under
+[Podcasts: the SHOWS half](#podcasts-the-shows-half).
 
 ## Decisions
 
@@ -251,12 +256,317 @@ second of both at once at the start of a talk press.
   feed to parse (XML on an ESP32), an episode list to hold, and a resume
   position per show in NVS. Same tile, but not the same size of job.
 
+## Font size, and whether a list can scroll
+
+**Both built and on the board, 2026-11-06.** Rax asked two questions the same
+evening — can a list scroll, and can the type be bigger — and they turn out to
+be the same question, because enlarging the type is what makes a list too long
+for the circle.
+
+![Before, after, and scrolled to the end](assets/radio-font-scroll.png)
+
+### Scrolling: yes, and it costs nothing
+
+**The tileview only takes horizontal drags.** Every tile is added with
+`LV_DIR_LEFT | LV_DIR_RIGHT` (`muse_ui.c`), so a vertical drag has no
+competing claimant and the row container can simply be made scrollable. This
+is the opposite of the STOP/BACK bug, where a *horizontal* drift was claimed
+by the tileview: the axes do not overlap, so page-turning is untouched.
+
+`SCROLL_CHAIN` is cleared on the container anyway, so an over-scroll at either
+end stops there rather than becoming a page turn.
+
+**It cannot be verified from here.** A finger cannot be simulated over USB, so
+the console grew `>page=radio:scroll=<px>` and the third panel above is the
+list driven to its end programmatically. That proves the geometry and the
+clipping; it does not prove the gesture.
+
+### Type: yes, up to 24 px, and only for names the firmware owns
+
+The ceiling was never the font pipeline — it is the **4 MB app slot, of which
+3.61 MB was already used**. Unifont's CJK alone is 1.2 MB of that.
+
+| Font | Coverage | Flash |
+|---|---|---|
+| Unifont 16 px (today's fallback) | every CJK ideograph, kana, Hangul | 1.2 MB |
+| Noto TC, Big5 level 1, 16 px | 5495 common traditional characters | 0.44 MB |
+| Noto TC, Big5 level 1, 24 px | same | 0.86 MB |
+| **Noto TC, the names only, 16 + 24 px** | **the 78 characters the tables use** | **25 KB** |
+
+*(how: `lv_font_conv@1.5.3` against NotoSansTC-Medium, bytes counted in the
+generated C.)*
+
+**So the subset is what shipped.** `CONFIG_MUSE_PAGE_CJK_24` adds 25 KB and
+gives `muse_page_list_font()` (24 px) and `muse_page_list_sub_font()` (16 px,
+anti-aliased to match). Both fall back to the caption font, so nothing
+disappears — it is drawn small instead.
+
+- **This works only for text the firmware owns.** Station names and genres are
+  a compiled-in table, so their characters are known at build time. An episode
+  title or an ICY now-playing line arrives from the network and will fall back
+  to 16 px Unifont. Podcasts under option B put a runtime title on screen at
+  level 2, so that line cannot be enlarged this way.
+- **Adding a station now means regenerating the font.** A missing character
+  does not fail the build; it draws small beside its 24 px neighbours.
+  `tools/muse/gen_page_cjk_font.sh` carries the character list.
+- **The existing Noto option is useless here.** `CONFIG_MUSE_CJK_FONT_NOTO` is
+  Noto Sans **SC** over GB2312 — simplified only, so 廣, 聲, 樂, 灣 and 電 are
+  all missing. Every one of them is in a station name. Unifont is the only
+  full fallback this board has.
+- **The row grew from 48 px to 56 px**, so five of the six stations are on
+  screen and the sixth is a scroll away. Six no longer fit, and that is the
+  point: the limit moved from the panel to the scroll.
+
+### What would make runtime text bigger
+
+Replacing Unifont with Noto TC Big5 level 1 at 24 px is **0.86 MB against
+1.2 MB — it saves 340 KB** and makes every CJK glyph on the gadget bigger and
+anti-aliased, captions and chat replies included. The cost is coverage: no
+Hangul, no kana, and no rare or simplified-only character, each of which
+becomes a box in a Muse reply. Not taken tonight, because it changes what chat
+can draw and that is a decision about the whole gadget rather than this page.
+
+## Podcasts: the SHOWS half
+
+**Decided 2026-11-06, and built the same day** — see "Built" below for what
+the board actually does. Mockups:
+<https://claude.ai/artifact/XMLK42mbxoMfv4eHtp62Rp>
+
+### The shows
+
+Rax's seven, 2026-11-06. Feed URLs resolved through the iTunes lookup API and
+each one fetched, so these are the real published feeds and the table is
+measured rather than assumed.
+
+| Show | Feed | Feed XML | Items | Newest |
+|---|---|---|---|---|
+| All-In | `rss.libsyn.com/shows/254861/destinations/1928300.xml` | 4.2 MB | 442 | 85.8 min |
+| 跳脫 Do 式圈 | `feeds.soundon.fm/podcasts/22505944-…xml` | 1.4 MB | 223 | 25.9 min |
+| 博音 | `feed.firstory.me/rss/user/ckyjmnkp0166d0830od1kznfj` | 2.3 MB | 253 | 46.7 min |
+| 游庭皓的財經皓角 | `feeds.soundcloud.com/users/soundcloud:users:735679489/sounds.rss` | 1.6 MB | 500 | 31.6 min |
+| Gooaye 股癌 | `feeds.soundon.fm/podcasts/954689a5-…xml` | 3.2 MB | 711 | 49.6 min |
+| 台灣通勤第一品牌 | `anchor.fm/s/1ea77470/podcast/rss` | 1.8 MB | 597 | 53.8 min |
+| 法客電台 | `feed.firstory.me/rss/user/ckudnw7fn4tqg0870axzgirva` | 8.2 MB | 832 | 74.9 min |
+
+**"All-In" is read as the Chamath / Jason / Sacks / Friedberg show**, the one
+that matches the finance half of this list. Two other podcasts carry the name;
+if it was one of those, it is a one-line change.
+
+*(how: `curl -L -A 'muse-gadget/1.0'` on each feed; enclosures probed with a
+ranged `GET`.)*
+
+- **Every enclosure is MP3** (`type="audio/mpeg"`, all seven). The AAC decoder
+  and the TS demuxer the radio needed sit this one out — podcasts land on the
+  minimp3 path that already works.
+- **A feed is 1.4–8.2 MB of XML and the board has 2.7 MB of free PSRAM**, so it
+  can never be held whole. Items are newest-first, so a parser that stops after
+  four `<item>` elements reads about 10 KB and closes the socket. The size stops
+  mattering the moment the parse is streaming — and it has to be streaming,
+  which is the one piece of real new code.
+- **All seven honour a byte range**, so a resume point is an exact offset rather
+  than a timestamp converted through a bitrate guess. Episodes run 30–123 MB.
+- **`URL_MAX 320` is not enough any more.** After redirects the final enclosure
+  URL is 559 characters for All-In and **624 for 游庭皓的財經皓角** — both over
+  the radio's bound. It has to grow to 768.
+
+### Decided: option B, show → episodes → player
+
+![The three layouts; B was taken](assets/podcast-options.png)
+
+A (tap plays the newest) and C (one flat list across all shows) were the other
+two. C was never cheap — every feed fetched before a row can be drawn — and A
+was the recommendation only because it added no navigation state. Rax chose the
+depth.
+
+![Option B, all three levels](assets/podcast-option-b.png)
+
+**Seven shows fit because B's rows lose their second line.** Six was the
+radio's limit because a station row carries a genre caption under the name.
+A show row under B is one line, since the episode lives on the next screen:
+seven rows of 36 px with 4 px gaps run from y=105 to y=381, where the circle is
+still 360 px wide against the 330 px row. The radio's own six-row limit is
+unchanged.
+
+**Level 2 holds four episodes.** The show-name header and the BACK button each
+cost a row, and a fifth episode would sit at y=432 where the panel has curved
+in to 242 px — narrower than a row. Four is what the circle allows.
+
+**Level 3 is the player**, and its BACK returns to the episode list rather than
+to the shows list, which is the one place B costs more than a flag: the page
+now has a two-deep stack where radio had none.
+
+### Built, 2026-11-06
+
+![The three levels, running on the board](assets/podcast-built.png)
+
+All four panels above are the real screen, not mockups. New files:
+`muse_podcast_rss.{c,h}` (the feed reader), `muse_podcast.{c,h}` (the engine),
+and two more screens in `muse_radio_page.c`.
+
+**The parser is the only genuinely new code, and it was tested off the board.**
+`muse_podcast_rss.c` deliberately has no ESP-IDF in it, so a host harness could
+compile it and run all seven real feeds through it three ways: whole, in
+1460-byte reads, and one byte at a time. All three agree on every field of
+every item, which is what says no chunk boundary is special — the state that a
+read can land in the middle of (a tag name, an attribute list, an entity, a
+CDATA terminator) is all in the struct. The results were then compared against
+an independent extraction in Python: no mismatches.
+
+It is not an XML parser. Inside an `<item>` it keeps the **first** title,
+pubDate, duration and enclosure it sees and ignores everything else's text.
+That rule is what lets it read straight past a `<description>` full of escaped
+HTML without tracking where that element ends, because in all seven feeds the
+title comes first. A feed that put its description first would show that
+description's first tag as a title — a wrong line, not a crash.
+
+**Correcting the estimate above: four items cost 12–51 KB, not "about 10 KB".**
+Measured on the real feeds: 台灣通勤 12 KB, 游庭皓 14 KB, Gooaye 25 KB, All-In
+31 KB, 跳脫 Do 式圈 34 KB, 博音 39 KB, 法客電台 50 KB. The point stands — a
+50 KB read of an 8.2 MB feed is still the feed's size ceasing to matter — but
+the number was optimistic by up to 5x, because the descriptions these shows
+write are long.
+
+**Every enclosure answers 302, and `esp_http_client` does not follow it here.**
+Auto-redirect only runs inside `perform()`; when the body is read by hand with
+`open`/`fetch_headers`/`read`, a 302 is just a 302. This cost the first build
+on the board, which retried four times and gave up. The hops are now walked in
+`net_task` as the radio's fetch does, and because `Range` is set on the handle
+it survives `set_url()` — which is what makes a resume survive the redirect.
+
+**`URL_MAX 320` did not have to grow after all.** The bound named above is the
+radio's, and podcasts never go through it: the long URLs live in the podcast
+module's own `MUSE_RSS_URL_MAX`, which is 768 from the start, and in the
+redirect buffer beside it. `muse_radio.c` is untouched but for one line.
+
+**The resume point.** One record per show in NVS: a 32-bit hash of the
+enclosure URL **with the query string cut off**, the byte offset, and the file
+length — 12 bytes. The query has to go because SoundOn and Firstory regenerate
+a `?timestamp=` or `?v=` on every feed build, so hashing the whole URL would
+throw the place away roughly daily; the path carries the episode's own id on
+all seven feeds. It is written when playback stops and when PAUSE is pressed —
+a deliberate pause being the moment you are most likely to put the gadget down
+— and **not** on a seek, which would be a flash write per tap of -30.
+
+The open question above asked whether the offset should be dropped at the end.
+It is, and also at both other places where resuming would be unkind: under 30
+seconds in there is nothing to come back to, and within 45 seconds of the end
+it would resume something you had finished.
+
+**A bug worth recording.** The save first lived in the decoder task's exit
+path, behind the same `epoch == s_epoch` check the radio uses. That check can
+never be true on a stop, because moving the epoch is *how* a stop tells the
+workers to leave — so nothing was ever written, and the board said `resume=-1`
+after a clean run. The save belongs on the side that initiates the teardown,
+after it has waited for the workers.
+
+**PAUSE is a real pause, not a stop and restart.** The decoder stops writing to
+the speaker, the ring fills, and the fetch stalls on its own backpressure with
+the socket still open. Resuming is instant. If the server hangs up during a
+long pause, the fetch reconnects at the byte it had reached, which is the same
+path a dropped connection takes.
+
+**Muse pauses the episode rather than stopping it**, and lets go again when it
+is done — the opposite of the radio, which stops, because a live stream has no
+place to come back to.
+
+**One speaker, so the two halves stop each other.** `muse_radio_play()` calls
+`muse_podcast_stop()` and `muse_podcast_play()` calls `muse_radio_stop()`.
+Between them that is the whole arrangement; neither the page nor the console
+has to remember it.
+
+**Seeking reopens the socket.** ±30 s is converted to bytes through the file's
+average bitrate and the connection is made again with a new `Range`, which
+costs a re-buffer of a second or so. Verified on the board: a +600 s seek on a
+73.5 MB episode asked for byte 15,655,078 and got `206`.
+
+**Flash:** 3.50 MB of the 4 MB slot with the bench build, ~500 KB free.
+
+### Readable episode titles, 2026-11-06
+
+Rax, on seeing the list: *"the episodes page, the words are not easy to read.
+(maybe we can try use 跑馬燈 if sentence is too long?"* Both halves of that got
+built.
+
+![Before, after, and a title mid-scroll](assets/episodes-readable.png)
+
+**The 跑馬燈 is `LV_LABEL_LONG_MODE_SCROLL_CIRCULAR`** on the title in each
+episode row and on the player's title, at 9 s a lap — about a character every
+150 ms. LVGL's default gallops; at this speed four rows scrolling at once read
+as a list rather than as motion. Nothing else on the page moves.
+
+**But the harder half was the font, not the length.** The titles were being
+drawn in Unifont's 1-bit 16×16 bitmaps, a face designed to fit every plane of
+Unicode into a fixed cell, next to unscii's pixel Latin — so `EP596 歡迎來到`
+was two typefaces on one line, and at 16 px the denser hanzi filled their cell
+solid. `CONFIG_MUSE_CJK_FONT_NOTO_TC` replaces Unifont with anti-aliased Noto
+Sans TC, and `muse_page_text_font()` (new, in `muse_page.h`) hands a line of
+mixed runtime text that one font for the whole line, ASCII included.
+
+**LVGL cannot hold all of Big5 in one font.** `bitmap_index` in
+`lv_font_fmt_txt_glyph_dsc_t` is a **20-bit bitfield**, so a font's glyph data
+cannot pass 1 MB — and 13063 hanzi at 16 px 4 bpp is 1.05 MB. The compiler
+catches it, but only as `unsigned conversion ... changes value from '1051100'
+to '2524'` at the end of a full build. 3 bpp would fit in one file; LVGL only
+accepts 3 bpp compressed, which this firmware does not build. So it is two
+fonts, level 1 and level 2, chained through `font.fallback` — which costs
+nothing to lay out, because the line box comes from the primary font and a
+fallback glyph is placed by its own `ofs_y` against the same baseline.
+
+**Level 2 is 2 bpp, and that is what made it fit.** At 4 bpp the pair measured
+762 KB + 1030 KB of rodata and overflowed `ota_1` by 68 KB. Four grey levels
+instead of sixteen on level 2 brings it to 762 KB + 554 KB, and the shipping
+binary grew by only 64 KB over the Unifont build: **3.57 MB of 4 MB, 444 KB
+free.** (An earlier estimate of the font cost here was made by counting glyph
+bytes and was wrong by about 40%; the figures above are `xtensa-esp32s3-elf-size
+-A` on the objects.)
+
+**Level 2 is carried for Muse, not for podcasts.** Across 56 real episode
+titles from all seven shows, level 1 alone missed nothing but emoji and one
+`Ø`. It stays because Muse's chat replies are not limited to common characters
+the way a podcast title is — dropping it would be a coverage regression against
+Unifont, which is the one thing this swap is not meant to be.
+
+What the swap gives up: Hangul and the ideographs outside Big5, which draw as
+boxes. Unifont had them; nothing on this board writes them.
+
+One subtlety recorded in `tools/muse/gen_cjk_tc_font.sh`: the `U+3000..303F`
+block is **not** taken whole. Most of it is vertical-form brackets whose glyph
+boxes are far taller than the type, and `lv_font_conv` takes `line_height` from
+the tallest box in the subset — taking the block raises it from 20 to 31 px and
+moves every CJK caption in the firmware. Only the punctuation Chinese prose
+uses is listed.
+
+### Still open
+
+- **Nothing refreshes a feed in the background.** The fetch happens when you
+  tap a show, so the first episode list of a session waits on the network —
+  one to three seconds, and the screen says `LOADING...` while it does.
+- **The clocks drift from the bar on a variable-bitrate episode.** The bar is
+  the byte fraction and is exact; the two times go through
+  `total_bytes / duration`. These feeds are constant-bitrate MP3, so today it
+  is exact too, but nothing enforces that.
+- **There is no STOP on the episode player**, only PAUSE. Playback ends by
+  finishing, failing, or starting something else. Whether that wants a stop
+  button is a question for using it.
+- **A fifth episode is unreachable.** The parser keeps four and the circle
+  holds four; an older episode cannot be got to at all.
+- **The episode list is not scrolled, by construction.** Its window is exactly
+  four rows tall, so nothing is ever half-visible — but it also means the
+  scroll gesture gets no second test there.
+- **The Big5 level-2 font has never been seen drawing.** It hangs off level 1
+  through `font.fallback`, the same mechanism `caption_font()` already uses and
+  which visibly works, but no screen in this build has yet contained a
+  character outside level 1 — nothing on the board renders arbitrary text, and
+  Hatch's replies are spoken rather than captioned. A tofu box on a rare hanzi
+  is the worst this could be.
+
 ## Open questions
 
-- **Six rows is the hard limit.** At 16 px type and 48 px rows the list holds
-  six, and that is the round panel's edge. A seventh station needs either
-  scrolling — which the toggle decision was taken to avoid — or a smaller
-  CJK font than the board has.
+- ~~**Six rows is the hard limit.**~~ **Closed 2026-11-06.** The list scrolls
+  now, so the panel's edge is no longer the bound; see "Font size, and whether
+  a list can scroll" above. The toggle decision was taken to avoid scrolling,
+  and this gives it up — knowingly, because the alternative was keeping the
+  type at 8 px-equivalent Unifont.
 - **HLS carries video the board pays for and throws away.** Most of each
   segment is H.264. It costs download, not CPU, but on a metered link it
   would matter. An audio-only variant would be the fix if the station

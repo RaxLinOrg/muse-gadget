@@ -33,6 +33,7 @@
 #include "esp_audio_dec_default.h"
 #include "minimp3.h"
 #include "muse_audio.h"
+#include "muse_podcast.h"
 #include "muse_state.h"
 
 static const char *TAG = "radio";
@@ -988,6 +989,10 @@ bool muse_radio_play(int i)
     if (i < 0 || i >= STATIONS) {
         return false;
     }
+    /* One speaker between the two halves of the page. muse_podcast_play()
+     * does the same to this side; between them that is the whole of the
+     * arrangement, so neither the page nor the console has to remember it. */
+    muse_podcast_stop();
     muse_radio_stop();
     reap();
     if (s_net || s_play) {

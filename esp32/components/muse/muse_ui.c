@@ -594,12 +594,39 @@ static const lv_font_t *font_pick(const lv_font_t *full, const lv_font_t *compac
     return s_small ? compact : full;
 }
 
-#if CONFIG_MUSE_CJK_FONT_NOTO
+#if CONFIG_MUSE_CJK_FONT_NOTO_TC
+LV_FONT_DECLARE(muse_font_cjk_tc_16)
+LV_FONT_DECLARE(muse_font_cjk_tc2_16)
+#elif CONFIG_MUSE_CJK_FONT_NOTO
 LV_FONT_DECLARE(muse_font_cjk_noto_16)
-#define CJK_FONT muse_font_cjk_noto_16
 #elif CONFIG_MUSE_CJK_FONT
 LV_FONT_DECLARE(muse_font_cjk_16)
-#define CJK_FONT muse_font_cjk_16
+#endif
+
+#if CONFIG_MUSE_CJK_FONT
+/*
+ * The board's CJK face. With Noto TC it is two fonts, not one: LVGL keeps a
+ * glyph's bitmap offset in a 20-bit bitfield, so a single font cannot carry
+ * more than 1 MB of glyph data, and all of Big5 at 16 px 4 bpp is 1.05 MB.
+ * Level 1 is the font; level 2 hangs off its fallback, which costs nothing to
+ * draw and nothing to lay out -- the line box comes from the primary font and
+ * a fallback glyph is placed by its own offset against the same baseline.
+ */
+static const lv_font_t *cjk_font(void)
+{
+#if CONFIG_MUSE_CJK_FONT_NOTO_TC
+    static lv_font_t font;
+    if (!font.get_glyph_dsc) {
+        font = muse_font_cjk_tc_16;
+        font.fallback = &muse_font_cjk_tc2_16;
+    }
+    return &font;
+#elif CONFIG_MUSE_CJK_FONT_NOTO
+    return &muse_font_cjk_noto_16;
+#else
+    return &muse_font_cjk_16;
+#endif
+}
 #endif
 
 /* unscii-16 for captions and replies; with CONFIG_MUSE_CJK_FONT, a copy that
@@ -610,7 +637,7 @@ static const lv_font_t *caption_font(void)
     static lv_font_t font;
     if (!font.get_glyph_dsc) {
         font = lv_font_unscii_16;
-        font.fallback = &CJK_FONT;
+        font.fallback = cjk_font();
     }
     return &font;
 #else
@@ -621,6 +648,65 @@ static const lv_font_t *caption_font(void)
 const lv_font_t *muse_page_caption_font(void)
 {
     return caption_font();
+}
+
+/*
+ * A line that mixes Latin and CJK and should read as one typeface rather than
+ * two -- an episode title, "EP596 歡迎來到骨灰集散地", where the caption font
+ * would set the Latin in unscii's pixels and the Chinese in whatever the
+ * fallback is. With CONFIG_MUSE_CJK_FONT_NOTO_TC that fallback covers ASCII
+ * itself, so the whole line can come from it; without it there is no second
+ * face to prefer and this is the caption font.
+ */
+const lv_font_t *muse_page_text_font(void)
+{
+#if CONFIG_MUSE_CJK_FONT_NOTO_TC
+    return cjk_font();
+#else
+    return caption_font();
+#endif
+}
+
+#if CONFIG_MUSE_PAGE_CJK_24
+LV_FONT_DECLARE(muse_font_page_cjk_24)
+LV_FONT_DECLARE(muse_font_page_cjk_16)
+#endif
+
+/* A page's list rows, where the text is the compiled-in names a page owns
+ * rather than anything that came off the network. With CONFIG_MUSE_PAGE_CJK_24
+ * that is Noto at 24 px with only those names' characters in it; the 16 px
+ * caption font sits behind it for everything else, which is what an episode
+ * title or an ICY line falls back to. */
+const lv_font_t *muse_page_list_font(void)
+{
+#if CONFIG_MUSE_PAGE_CJK_24
+    static lv_font_t font;
+    if (!font.get_glyph_dsc) {
+        font = muse_font_page_cjk_24;
+        font.fallback = caption_font();
+    }
+    return &font;
+#else
+    return caption_font();
+#endif
+}
+
+/* The line under a list row. Same cell as the caption font, but anti-aliased
+ * to match the row above it -- Unifont's 1-bit bitmaps beside 24 px Noto read
+ * as a rendering bug rather than a hierarchy. Same fallback, so anything
+ * outside the compiled-in names still draws. */
+const lv_font_t *muse_page_list_sub_font(void)
+{
+#if CONFIG_MUSE_PAGE_CJK_24
+    static lv_font_t font;
+    if (!font.get_glyph_dsc) {
+        font = muse_font_page_cjk_16;
+        font.fallback = caption_font();
+    }
+    return &font;
+#else
+    return caption_font();
+#endif
 }
 
 #if CONFIG_MUSE_CJK_FONT

@@ -23,3 +23,16 @@ fullwidth forms. It has no Hangul, so Korean shows as boxes with it.
 Noto Sans SC is by Adobe and Google (https://github.com/notofonts/noto-cjk),
 licensed under the SIL Open Font License, version 1.1. This file is a
 conversion of an unaltered subset of the font.
+
+`muse_font_page_cjk_16.c` and `muse_font_page_cjk_24.c` are the page list
+fonts, built in with `CONFIG_MUSE_PAGE_CJK_24` and reached through
+`muse_page_list_font()` and `muse_page_list_sub_font()`: Noto Sans TC Medium
+at 16 px and 24 px, 4 bpp, holding only the characters the compiled-in station
+and show names use. About 25 KB of flash together, against 0.86 MB for every
+common traditional character at 24 px. A character outside that set falls back
+to the 16 px caption font, so adding a station means rerunning
+`tools/muse/gen_page_cjk_font.sh` with its characters added to the script.
+
+Noto Sans TC is by Adobe and Google (https://github.com/notofonts/noto-cjk),
+licensed under the SIL Open Font License, version 1.1. These files are
+conversions of an unaltered subset of the font.
