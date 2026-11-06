@@ -309,6 +309,12 @@ unpaired captures, `>ui.demo=1` shows `MuseGadget-DEMO` instead of the hardware
 name; `>ui.demo=0` restores it. This changes only the screen, not BLE identity,
 pairing, Wi-Fi or tokens.
 
+`>page=<name>:<rest>` hands `<rest>` to a registered page's own bench hook
+(`muse_page_t.bench`), since there is no way to tap the glass over the USB
+cable. The radio page takes `play=<n>`, `stop`, `state`, `list` and `shows`:
+`>page=radio:play=1` tunes the second station. The hook runs on the console
+task, so a page sets a flag for its own `tick()` rather than touching LVGL.
+
 The Seeed XIAO ESP32-S3 1.47 Touch Display has a 172×320 JD9853A LCD, AXS5106L
 touch and a PDM mic. **USR1 is push-to-talk and pairing confirmation, USR2
 sleeps and wakes the screen.** It has a microphone and no speaker, so replies

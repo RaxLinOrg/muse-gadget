@@ -618,6 +618,11 @@ static const lv_font_t *caption_font(void)
 #endif
 }
 
+const lv_font_t *muse_page_caption_font(void)
+{
+    return caption_font();
+}
+
 #if CONFIG_MUSE_CJK_FONT
 #define CJK_BAND_PAD 6          /* px each side of a CJK caption on a small screen */
 #define CJK_LINE_SPACE 4

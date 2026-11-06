@@ -1,0 +1,21 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Most Taiwanese stations stream AAC, not MP3 (plan/radio.md has the probe),
+# so the page needs a second decoder. Espressif's own, under their licence.
+# No `rules:` guard on MUSE_RADIO_ENABLED: it is a prebuilt static library
+# and nothing references it when the page is compiled out, so the linker drops
+# it. The download happens either way, which is the whole cost.
+dependencies:
+  espressif/esp_audio_codec: "~2.6"

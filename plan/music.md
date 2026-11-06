@@ -1,8 +1,8 @@
 # Music / now playing
 
-**Status:** blocked
+**Status:** route 2 picked — see radio.md
 **Branch:** TBD
-**Last updated:** 2026-11-01
+**Last updated:** 2026-11-05
 
 ## Goal
 
@@ -17,8 +17,9 @@ and what is closed and why:
 
 ![The four routes still open](assets/music-routes.png)
 
-Nobody should start writing code until one of these is picked, because the
-page above is the only part the four have in common.
+**Picked 2026-11-05: route 2, internet radio and podcasts.** The page, the
+decisions and what they cost are in [radio.md](radio.md). The other three
+stay above as the alternatives that were open at the time.
 
 ## Mockup
 
@@ -95,10 +96,9 @@ built.
 
 ## Blockers
 
-- **Blocked on a decision, not on code.** Four workable shapes — pictured
-  above, spelled out below; which one is built changes almost everything about
-  the work, so nothing should be written until one is picked. Rax is deciding
-  (2026-11-01).
+- ~~Blocked on a decision, not on code.~~ **Resolved 2026-11-05**: route 2.
+  The four shapes above are kept as the alternatives that were open; see
+  [radio.md](radio.md) for what was built on the one chosen.
 
 ## Open questions
 
