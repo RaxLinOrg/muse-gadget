@@ -180,6 +180,145 @@ static void mmss(int secs, char *out, size_t cap)
     }
 }
 
+/* ------------------------------------------------------- titles, tidied up */
+
+/*
+ * A feed's title is someone else's text, and some of it this screen cannot
+ * draw. 股癌 names every episode after an emoji and nothing else -- "EP712 |
+ * 🦌", "EP711 | 🕊️🐦🦚🦜🦉🦅🐦🐧" -- and an emoji is twice out of reach: it is in
+ * no subset the firmware carries, and it lives above U+FFFF, which LVGL's
+ * cmap stores as a uint16 and so cannot address at all. Left alone the row
+ * reads "EP712 | ▯", and the separator is then pointing at nothing.
+ *
+ * So the undrawable characters go, and the punctuation left stranded at
+ * either end goes with them: "EP712 | 🦌" becomes "EP712". The font itself
+ * decides what is drawable, rather than a list of emoji blocks written down
+ * here, which keeps this right when the subset changes.
+ *
+ * This lives on the page and not in muse_podcast_rss.c on purpose. The parser
+ * is kept free of ESP-IDF and of LVGL so it can be compiled and run on a
+ * host, and what a particular screen can draw is not its business anyway.
+ */
+
+#define TITLE_MAX MUSE_RSS_TITLE_MAX
+
+static uint32_t utf8_next(const char **p)
+{
+    const unsigned char *s = (const unsigned char *)*p;
+    uint32_t c = *s++;
+    int extra = 0;
+
+    if (c >= 0xF0) {
+        c &= 0x07;
+        extra = 3;
+    } else if (c >= 0xE0) {
+        c &= 0x0F;
+        extra = 2;
+    } else if (c >= 0xC0) {
+        c &= 0x1F;
+        extra = 1;
+    }
+    /* A truncated sequence stops here rather than running off the end; the
+     * bytes it leaves behind are continuation bytes, which decode as their
+     * own (undrawable) codepoints and are dropped. */
+    while (extra-- > 0 && (*s & 0xC0) == 0x80) {
+        c = (c << 6) | (*s++ & 0x3F);
+    }
+    *p = (const char *)s;
+    return c;
+}
+
+static bool drawable(uint32_t cp)
+{
+    lv_font_glyph_dsc_t dsc;
+
+    /* The space is kept whatever the font says about it: it is the one
+     * character here whose job is to take up room and draw nothing. */
+    return cp == ' ' || lv_font_get_glyph_dsc(muse_page_text_font(), &dsc, cp, 0);
+}
+
+/* Punctuation that only means something between two things, so it is dropped
+ * when it ends up at an edge. */
+static bool stranded(uint32_t cp)
+{
+    return cp == ' ' || cp == '|' || cp == '-' || cp == '/' || cp == ':'
+        || cp == ',' || cp == 0x00B7 /* · */ || cp == 0x2013 /* – */
+        || cp == 0x2014 /* — */ || cp == 0x3001 /* 、 */ || cp == 0xFF0C /* ， */
+        || cp == 0xFF1A /* ： */ || cp == 0xFF5C /* ｜ */;
+}
+
+/* Writes the drawable part of `src` into `out` and returns where it starts --
+ * which is inside `out`, past any leading punctuation. Empty when the title
+ * was nothing this screen can show. */
+static const char *tidy_title(const char *src, char *out, size_t cap)
+{
+    size_t n = 0;
+    bool last_space = false;
+    bool last_sep = false;
+
+    for (const char *p = src; *p;) {
+        const char *was = p;
+        uint32_t cp = utf8_next(&p);
+        size_t len = (size_t)(p - was);
+
+        if (!drawable(cp)) {
+            continue;
+        }
+        /* Two words whose separator was an emoji must not close up into one,
+         * but nor should the gap left behind widen -- and where the emoji sat
+         * between two separators, "EP1 | ? | EP2", only one should survive. */
+        if (cp == ' ') {
+            if (last_space) {
+                continue;
+            }
+            last_space = true;
+        } else if (stranded(cp)) {
+            if (last_sep) {
+                continue;
+            }
+            last_sep = true;
+            last_space = false;
+        } else {
+            last_space = false;
+            last_sep = false;
+        }
+        if (n + len >= cap) {
+            break;
+        }
+        memcpy(out + n, was, len);
+        n += len;
+    }
+    out[n] = '\0';
+
+    for (;;) {
+        size_t last = 0;
+        for (size_t i = 0; out[i];) {
+            const char *q = out + i;
+            last = i;
+            utf8_next(&q);
+            i = (size_t)(q - out);
+        }
+        if (!out[0]) {
+            break;
+        }
+        const char *q = out + last;
+        if (!stranded(utf8_next(&q))) {
+            break;
+        }
+        out[last] = '\0';
+    }
+
+    size_t head = 0;
+    for (;;) {
+        const char *q = out + head;
+        if (!*q || !stranded(utf8_next(&q))) {
+            break;
+        }
+        head = (size_t)(q - out);
+    }
+    return out + head;
+}
+
 /* ---------------------------------------------------------------- painting */
 
 static void show_view(view_t v)
@@ -304,7 +443,22 @@ static void paint_episodes(void)
             continue;
         }
         lv_obj_remove_flag(s_ep_row[i], LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text(s_ep_title[i], ep->title);
+
+        /* A title that was all emoji leaves nothing to put here, so the date
+         * moves up into the empty line rather than the row looking broken --
+         * and then it is left out of the line below, where it would read
+         * twice. */
+        char title[TITLE_MAX];
+        char when[8];
+        const char *text = tidy_title(ep->title, title, sizeof(title));
+        bool date_on_top = false;
+
+        if (!*text && ep->month) {
+            snprintf(when, sizeof(when), "%02d/%02d", ep->month, ep->day);
+            text = when;
+            date_on_top = true;
+        }
+        lv_label_set_text(s_ep_title[i], text);
         lv_obj_set_style_text_color(s_ep_title[i],
                                     lv_color_hex(i == playing ? COLOR_ACCENT : COLOR_LIT), 0);
 
@@ -317,7 +471,7 @@ static void paint_episodes(void)
         if (ep->secs > 0) {
             at += snprintf(sub + at, sizeof(sub) - at, "%d 分", (ep->secs + 30) / 60);
         }
-        if (ep->month) {
+        if (ep->month && !date_on_top) {
             at += snprintf(sub + at, sizeof(sub) - at, "%s%02d/%02d", at ? "   " : "",
                            ep->month, ep->day);
         }
@@ -339,7 +493,10 @@ static void paint_podcast(void)
     const char *state;
 
     lv_label_set_text(s_pod_show, sh ? sh->name : "");
-    lv_label_set_text(s_pod_title, muse_podcast_playing_title());
+    /* No date to fall back on here, so an all-emoji title leaves this line
+     * blank -- the show's name is already above it. */
+    char title[TITLE_MAX];
+    lv_label_set_text(s_pod_title, tidy_title(muse_podcast_playing_title(), title, sizeof(title)));
 
     switch (muse_podcast_state()) {
     case MUSE_EP_CONNECTING: state = "CONNECTING"; color = COLOR_CAPTION; break;

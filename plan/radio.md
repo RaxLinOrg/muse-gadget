@@ -536,6 +536,44 @@ the tallest box in the subset — taking the block raises it from 20 to 31 px an
 moves every CJK caption in the firmware. Only the punctuation Chinese prose
 uses is listed.
 
+### Titles this screen cannot draw, 2026-11-10
+
+Rax asked why 股癌's episodes showed no Chinese. They don't have any.
+
+![What the feed publishes, and what the row shows now](assets/gooaye-emoji-titles.png)
+
+The host titles every episode after an emoji and nothing else — `EP712 | 🦌`,
+`EP711 | 🕊️🐦🦚🦜🦉🦅🐦🐧`. **523 of the show's 712 episodes contain no Chinese
+character at all**, a habit that starts around EP403; the last title with hanzi
+in it is `EP402 | 王姿方你email是空號`. So this was never a font or parser
+fault: 股, 癌 and every character of the other six shows' titles are in the
+level-1 subset, and 博音's `EP249 | 內耗跟癌症有關…` draws 癌 correctly beside
+it.
+
+An emoji is out of reach twice over. It is in no subset the firmware carries,
+and it lives above U+FFFF, which LVGL's cmap stores as a `uint16` and so cannot
+address at all — subsetting an emoji font would not help, and a colour one is
+further out still. The row therefore read `EP712 | ▯`, with the separator
+pointing at nothing.
+
+`tidy_title()` in `muse_radio_page.c` drops what cannot be drawn and then the
+punctuation left stranded at either end, so the row reads `EP712`. **The font
+decides what is drawable** — `lv_font_get_glyph_dsc()` against
+`muse_page_text_font()`, which walks the fallback chain — rather than a list of
+emoji blocks written down in the page, so it stays right when the subset
+changes. Where a title is *nothing but* emoji the date moves up into the empty
+line and is left out of the line below, where it would otherwise read twice.
+
+It lives on the page rather than in `muse_podcast_rss.c` deliberately: the
+parser is kept free of ESP-IDF and of LVGL so it can be compiled and run on a
+host, and what one screen can draw is not its business. The same extraction
+trick tested this — `tidy_title()` compiled on the host against a stand-in for
+the font, run under ASan and UBSan over the real titles plus truncated UTF-8, a
+300-character title and emoji in every position.
+
+A side effect worth knowing: a 20-bit `bitmap_index` is not the only uint16 in
+LVGL's font path. Nothing outside the BMP can be shown by this firmware at all.
+
 ### Still open
 
 - **Nothing refreshes a feed in the background.** The fetch happens when you
@@ -553,6 +591,10 @@ uses is listed.
 - **The episode list is not scrolled, by construction.** Its window is exactly
   four rows tall, so nothing is ever half-visible — but it also means the
   scroll gesture gets no second test there.
+- **A fifth episode is still unreachable**, and on 股癌 that now matters a
+  little more: four rows of `EP712`, `EP711`, `EP710`, `EP709` carry no hint
+  of what any episode is about, and the feed has no `itunes:subtitle` to put
+  there instead — its `description` opens with an ad read.
 - **The Big5 level-2 font has never been seen drawing.** It hangs off level 1
   through `font.fallback`, the same mechanism `caption_font()` already uses and
   which visibly works, but no screen in this build has yet contained a
