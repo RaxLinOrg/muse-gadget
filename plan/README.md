@@ -14,7 +14,7 @@ after a week does not mean re-deriving it.
 | [music.md](music.md) | Music on the gadget | blocked | nothing built |
 | [radio.md](radio.md) | Internet radio and podcasts | working | on `main` |
 | [vm-config.md](vm-config.md) | Settings kept on the user's VM | blocked | `feat/vm-config` |
-| [radar.md](radar.md) | Aircraft radar page | mockup only | `feat/radar` |
+| [radar.md](radar.md) | Radar page: planes, ships, weather | mockup only | `feat/radar` |
 
 ## Conventions
 
