@@ -1335,7 +1335,12 @@ static void build_screen(void)
         s_batt_fill = make_box(s_batt_outline, 0, BATT_H - 4);
         lv_obj_set_style_bg_color(s_batt_fill, lv_color_hex(COLOR_BATT_GREEN), 0);
         lv_obj_set_style_bg_opa(s_batt_fill, LV_OPA_COVER, 0);
-        lv_obj_align(s_batt_fill, LV_ALIGN_LEFT_MID, 2, 0);
+        /* No x offset: LV_ALIGN_LEFT_MID is already measured from the
+         * outline's content area, which starts inside the 2 px border. The
+         * 2 that used to be here counted the border twice, leaving a dark
+         * column between the border and the fill -- and, at 100%, running
+         * the fill under the border on the right to make up for it. */
+        lv_obj_align(s_batt_fill, LV_ALIGN_LEFT_MID, 0, 0);
 
         s_batt_bolt_bg = make_label(s_batt_outline, &lv_font_montserrat_16, COLOR_LIT);
         lv_label_set_text(s_batt_bolt_bg, LV_SYMBOL_CHARGE);
