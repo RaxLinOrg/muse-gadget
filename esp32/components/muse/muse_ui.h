@@ -74,4 +74,5 @@ void muse_ui_bench_demo(bool enabled);
  * looks like from the outside. There to prove the UI watchdog fires, and to
  * see what its core dump actually contains, without waiting for a real one. */
 void muse_ui_bench_hang(int secs);
+void muse_ui_bench_scroll(int y);
 #endif

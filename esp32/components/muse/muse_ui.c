@@ -2070,6 +2070,15 @@ void muse_ui_bench_sub(int index)
 
 static volatile int s_bench_hang;
 
+static volatile int s_bench_scroll = -1;
+
+/* >ui.scroll=<px> on the console: the settings page cannot be dragged from
+ * the port, and the rows worth a screenshot are often below the fold. */
+void muse_ui_bench_scroll(int y)
+{
+    s_bench_scroll = y;
+}
+
 void muse_ui_bench_hang(int secs)
 {
     s_bench_hang = secs;   /* taken up by the frame timer, on the UI task */
@@ -2141,6 +2150,11 @@ static void frame_tick(lv_timer_t *timer)
         int want = s_bench_page < s_tile_n ? s_bench_page : s_tile_n - 1;
         s_bench_page = -1;
         if (s_tv) lv_tileview_set_tile(s_tv, s_tile_obj[want], LV_ANIM_OFF);
+    }
+    if (s_bench_scroll >= 0) {
+        int y = s_bench_scroll;
+        s_bench_scroll = -1;
+        muse_settings_ui_bench_scroll(y);
     }
     if (s_bench_sub >= 0) {
         /* Settings has to be the tile on screen and built, so send >ui=settings

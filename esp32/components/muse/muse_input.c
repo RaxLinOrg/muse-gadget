@@ -42,6 +42,7 @@
 #include "muse_menu.h"
 #include "muse_page.h"
 #include "muse_pet_sound.h"
+#include "muse_crash_log.h"
 #include "muse_settings.h"
 #include "muse_state.h"
 #include "muse_ui.h"
@@ -853,6 +854,26 @@ static bool console_command(char *line, bool whole)
         s_nap_now = true;
         return true;
     }
+    /* ">crashlog" prints the ring muse_crash_log keeps for the core dump, and
+     * ">debuglog=1" is the Settings switch from the port, for a board on a
+     * bench with no finger free. Both are in the shipped firmware on purpose:
+     * they are what support asks for when a gadget misbehaves. */
+    if (!strcmp(line, "crashlog")) {
+        muse_crash_log_dump();
+        return true;
+    }
+    if (!strcmp(line, "debuglog=1") || !strcmp(line, "debuglog=0")) {
+        bool on = line[9] == '1';
+        muse_settings_set_debug_log(on);
+        printf("@debuglog %d\n", on);
+        fflush(stdout);
+        return true;
+    }
+    if (!strcmp(line, "debuglog")) {
+        printf("@debuglog %d\n", muse_settings_debug_log());
+        fflush(stdout);
+        return true;
+    }
 #if LV_USE_SNAPSHOT
     if (!strcmp(line, "ui.demo=1") || !strcmp(line, "ui.demo=0")) {
         muse_ui_bench_demo(!strcmp(line, "ui.demo=1"));
@@ -875,6 +896,12 @@ static bool console_command(char *line, bool whole)
      * deadlocked screen looks like: frames stop, the idle task carries on.
      * With CONFIG_MUSE_UI_WATCHDOG on, that is how you check the watchdog
      * fires and see what its core dump holds. */
+    if (!strncmp(line, "ui.scroll=", 10)) {
+        muse_ui_bench_scroll(atoi(line + 10));
+        printf("@ui.scroll %d\n", atoi(line + 10));
+        fflush(stdout);
+        return true;
+    }
     if (!strncmp(line, "ui.hang=", 8)) {
         int secs = atoi(line + 8);
         if (secs <= 0 || secs > 120) {
@@ -933,9 +960,11 @@ static bool console_command(char *line, bool whole)
  * the BLE CMD characteristic, or one of the console's own: "status" prints
  * the device's state, "power" the battery meter (muse_battery.h) and
  * "power.reset" starts it over, "nap" sleeps and leaves Wi-Fi at once (as
- * two minutes asleep on battery would; 'w' rejoins), "face=" shows a face
- * (see set_face), and "chat=" sends a typed message to Hatch (see chat_line
- * and tools/muse/chat.py).
+ * two minutes asleep on battery would; 'w' rejoins), "crashlog" prints the
+ * log ring a core dump would carry, "debuglog" / "debuglog=1" read and set
+ * the Settings switch of the same name, "face=" shows a face (see set_face),
+ * and "chat=" sends a typed message to Hatch (see chat_line and
+ * tools/muse/chat.py).
  */
 static void serial_task(void *arg)
 {

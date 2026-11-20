@@ -290,6 +290,24 @@ menu "Muse"
             still in front of whoever noticed. The watchdog holds off entirely
             while the screen is asleep or the camera view has LVGL paused.
 
+    config MUSE_CRASH_LOG
+        bool "Keep the last log lines where a core dump can reach them"
+        default y
+        help
+            Mirrors the console log into a ring in internal RAM. A core dump
+            built with ESP_COREDUMP_CAPTURE_DRAM stores .bss whole, so the
+            ring comes back with the backtraces over USB long after the
+            freeze -- which is the only way to see the words leading up to
+            one, since nobody is capturing the port when it happens.
+
+    config MUSE_CRASH_LOG_KB
+        int "Kilobytes of internal RAM for that ring"
+        depends on MUSE_CRASH_LOG
+        default 8
+        help
+            8 KB is roughly the last hundred lines. It is internal RAM for
+            good: a core dump skips anything in PSRAM.
+
     config MUSE_CJK_FONT_NOTO_TC
         bool "Draw CJK captions with Noto Sans TC instead of Unifont"
         depends on MUSE_CJK_FONT

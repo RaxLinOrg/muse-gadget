@@ -56,4 +56,7 @@ void muse_settings_ui_note(lv_obj_t *list, const char *text);
 /* Bench only (devices/sdkconfig.muse-bench): open the nth registered page's
  * settings page, as >ui.sub=<n> on the console does. */
 void muse_settings_ui_bench_plug(int i);
+/* Bench only: scroll the settings page on screen to this y, so a screenshot
+ * can reach the rows a finger would have to drag to. */
+void muse_settings_ui_bench_scroll(int y);
 #endif

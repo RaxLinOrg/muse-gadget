@@ -34,6 +34,7 @@ if(CONFIG_MUSE_ENABLED)
         "muse_voice.c"
         "muse_adpcm.c"
         "muse_settings.c"
+        "muse_crash_log.c"
         "muse_text.c"
         "muse_link.c"
         "muse_ble.c")

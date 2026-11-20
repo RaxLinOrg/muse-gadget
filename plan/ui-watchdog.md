@@ -2,7 +2,7 @@
 
 **Status:** working
 **Branch:** `feat/ui-hang-diagnosis`
-**Last updated:** 2026-11-19
+**Last updated:** 2026-11-20
 
 ## Goal
 
@@ -49,12 +49,15 @@ waiting is what a deadlocked screen does.
 
 ## What was built
 
-Three pieces, each useless without the others.
+Five pieces, each useless without the others.
 
-1. **A coredump partition**, 64 KB, in `partitions_muse.csv` (`0x822000`) and
-   `partitions_muse_8mb.csv` (`0x7E2000`). Both sit after the app slots and the
-   product data, so nothing above them moves and no existing board's layout
-   shifts. There was room to spare: the 16 MB table ends at 8.13 MB.
+1. **A coredump partition** in `partitions_muse.csv` (`0x822000`, 512 KB) and
+   `partitions_muse_8mb.csv` (`0x7E2000`, 64 KB). Both sit after the app slots
+   and the product data, so nothing above them moves and no existing board's
+   layout shifts. There was room to spare: the 16 MB table ends at 8.13 MB.
+   The backtraces alone fit in 64 KB; the 16 MB table is eight times that so
+   it can also hold the DRAM capture described in piece 4, which the 8 MB
+   table has no room for.
 2. **`CONFIG_MUSE_UI_WATCHDOG`** (`muse_ui_watchdog.c`), which watches the one
    thing that actually stops — the LVGL frame timer. `frame_tick()` bumps a
    counter; a priority-1 task checks it every second and panics after
@@ -62,6 +65,21 @@ Three pieces, each useless without the others.
    `muse-waveshare-s3-175c` at 10 s.
 3. **`>ui.hang=<secs>`**, a bench-only console verb that blocks the UI task, so
    the watchdog can be proved to fire without waiting for a real freeze.
+4. **`CONFIG_MUSE_CRASH_LOG`** (`muse_crash_log.c`), the words to go with the
+   backtraces. The backtrace says where the firmware stopped and nothing about
+   what it was doing on the way there; that is in the console log, which exists
+   only while somebody is capturing the port -- which, for a gadget in a
+   pocket, is never. So the log is mirrored into an 8 KB ring in `.bss`, and
+   `CONFIG_ESP_COREDUMP_CAPTURE_DRAM` makes the dump store `.bss` whole. The
+   ring has to be internal RAM: the dump skips PSRAM, which is also why
+   `main/diagnostic_log.c`'s 16 KB PSRAM ring is no use here (it is never
+   installed in this firmware either, and keeps only `link.*` lines).
+   `>crashlog` prints it without a dump at all.
+5. **A "Debug log" switch** in Settings (`muse_settings_debug_log`), which
+   raises every tag to `ESP_LOG_DEBUG` so the ring carries more than the
+   INFO-level story. It needed `CONFIG_LOG_MAXIMUM_LEVEL_DEBUG` to be of any
+   use -- see the findings -- and it is a bench tool, not a setting to leave
+   on. `>debuglog` and `>debuglog=1` work it from the port.
 
 The watchdog holds off while LVGL is paused on purpose — the screen asleep on
 battery, or the camera view open. A board that reboots itself every time the
@@ -98,6 +116,55 @@ screen sleeps would not be a diagnosis, it would be a new bug.
 - **Flash cost is about 66 KB** — *(how: measured)*. The bench image went from
   3,739,648 to 3,805,184 bytes, 3.63 MB of the 4 MB slot.
 
+### The log the dump carries, 2026-11-19
+
+![The switch, at the foot of Settings](assets/settings-debug-log.png)
+
+- **A runtime switch alone would have shown nothing** — *(how: read
+  `build-.../sdkconfig`)*. The image was built with
+  `CONFIG_LOG_MAXIMUM_LEVEL=3`, so every `ESP_LOGD` in it was compiled out and
+  no `esp_log_level_set` call brings one back. The ceiling has to go up at
+  build time, which is the one rebuild this feature needs; after it the switch
+  is runtime for good. Raising it cost nothing measurable — the image is
+  3,805,184 bytes either way, 384 KB still free in the slot — because the
+  Wi-Fi debug strings are in Espressif's prebuilt libraries and are not
+  rebuilt.
+- **Raising our own components' ceiling would have been pointless** — *(how:
+  counted)*. `components/muse` and `components/muse_radio` hold two
+  `ESP_LOGD` calls between them and no `ESP_LOGV`. Everything the switch
+  reveals belongs to IDF: 508 debug lines in one boot, from `nvs`, `wifi`,
+  `event`, `i2s_common` and `vfs_calls`.
+- **The ring works and wraps** — *(how: `>crashlog` on the board)*. 7,145
+  bytes and 124 lines after a quiet boot, the first being `muse: board:
+  Waveshare ESP32-S3-Touch-AMOLED-1.75C`; 8,192 bytes and 147 lines with the
+  switch on, 94 of them `D`, the oldest dropped. It starts at
+  `muse_app_run()`, so the bootloader and Home Link's first lines are not in
+  it.
+- **Turning the switch on crashed the board, twice over** — *(how: it did)*.
+  `***ERROR*** A stack overflow in task lcd_send`. `spi_master` logs twice per
+  bus transaction at DEBUG, from inside `lcd_send`, whose stack had no room
+  for it -- and the ring's hook, which formats the line on the caller's stack,
+  was making it worse at 256 bytes. The hook's buffer is now 128 bytes and
+  `spi_master` is pinned back to INFO whenever the switch goes on. With both,
+  the board runs with debug logging on and still boots in one go.
+- **And then it would not come back** — *(how: the port stopped enumerating)*.
+  The switch is stored in NVS, so the panic rebooted into the same setting and
+  crashed again: a boot loop with no way out but catching a flash window
+  between resets (it took three tries). `muse_app_run` now clears the switch
+  when the last reset was a crash, so one crash disarms it.
+  A diagnostic that can brick the thing it diagnoses is worse than none.
+- **A panic on this board does not report `ESP_RST_PANIC`** — *(how: the
+  disarm did not fire until the check was widened)*. With
+  `esp_reset_reason() == ESP_RST_PANIC` the switch stayed on through a
+  confirmed watchdog panic and core dump; with the whole crash set
+  (`PANIC`, `INT_WDT`, `TASK_WDT`, `WDT`, `UNKNOWN`) the next boot cleared it,
+  `>debuglog` reading 0. Both watchdogs are compiled out of this firmware, so
+  by elimination the reason is `ESP_RST_UNKNOWN` — inferred, not read: the
+  boot that would say so is the one that opening the port destroys.
+- **`>ui.scroll=<px>`** was added alongside, bench-only, because the settings
+  page cannot be dragged from the port and every row worth a screenshot is
+  below the fold.
+
 ## Still open
 
 - **The original freeze is still unexplained**, and this does not explain it —
@@ -114,12 +181,27 @@ screen sleeps would not be a diagnosis, it would be a new bug.
   default.
 - **Nothing reads the dump on its own.** It waits in flash until someone asks.
   Posting it to Hatch on the next boot would be the obvious next step.
+- **The 8 MB boards get backtraces only.** `partitions_muse_8mb.csv` has
+  56 KB of slack above its coredump partition, not the 128 KB the DRAM capture
+  wants, so `CONFIG_ESP_COREDUMP_CAPTURE_DRAM` is set in the
+  `muse-waveshare-s3-175c` profile rather than in `sdkconfig.muse`. Those
+  boards keep the ring in RAM and `>crashlog`; they just cannot read it back
+  after the fact.
+- **Debug logging is still something to hold at arm's length.** One tag has
+  been pinned back because it crashed the board; there is no reason to think
+  `spi_master` is the only driver that logs from a task with a tight stack.
+  The switch is for a board on a bench with the port open.
 
 ## References
 
 - Files: `esp32/components/muse/muse_ui_watchdog.{c,h}`,
+  `esp32/components/muse/muse_crash_log.{c,h}`,
+  `esp32/components/muse/muse_app.c` (the panic disarms the switch),
+  `esp32/components/muse/muse_settings.{c,h}`,
+  `esp32/components/muse/muse_settings_ui.c` (the switch),
   `esp32/components/muse/muse_ui.c` (`frame_tick`),
-  `esp32/components/muse/muse_input.c` (`>ui.hang=`),
+  `esp32/components/muse/muse_input.c` (`>ui.hang=`, `>ui.scroll=`,
+  `>crashlog`, `>debuglog=`),
   `esp32/partitions_muse.csv`, `esp32/partitions_muse_8mb.csv`,
   `esp32/devices/sdkconfig.muse`,
   `esp32/devices/sdkconfig.muse-waveshare-s3-175c`

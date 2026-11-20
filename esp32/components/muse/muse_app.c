@@ -26,6 +26,8 @@
 #include "muse_ble.h"
 #include "muse_chat.h"
 #include "muse_input.h"
+#include "esp_system.h"
+#include "muse_crash_log.h"
 #include "muse_settings.h"
 #include "muse_state.h"
 #include "muse_ui.h"
@@ -53,6 +55,9 @@ static void on_setting(muse_setting_t what)
     case MUSE_SETTING_BLE:
         muse_ble_apply();
         break;
+    case MUSE_SETTING_DEBUG_LOG:
+        muse_crash_log_verbose(muse_settings_debug_log());
+        break;
     case MUSE_SETTING_HATCH:
         muse_hatch_config_changed();
         break;
@@ -66,10 +71,27 @@ const muse_board_t *muse_board;
 void muse_app_run(const muse_board_t *board)
 {
     muse_board = board;
+    /* Before the first line worth keeping: everything logged from here on is
+     * mirrored into the ring a core dump can bring back. */
+    muse_crash_log_init();
     ESP_LOGI(TAG, "board: %s", board->name);
     ESP_ERROR_CHECK(board->init());
     ESP_ERROR_CHECK(muse_settings_init());
     muse_settings_set_listener(on_setting);
+    /* A crash turns the Debug log switch off again. It is stored in NVS, and
+     * debug logging is heavy enough to be the cause of a panic rather than a
+     * witness to it -- left armed, one crash becomes a boot loop with no way
+     * out but the console. (It happened: see plan/ui-watchdog.md.) */
+    esp_reset_reason_t why = esp_reset_reason();
+    ESP_LOGI(TAG, "last reset: %d", (int)why);
+    bool crashed = why == ESP_RST_PANIC || why == ESP_RST_INT_WDT
+                || why == ESP_RST_TASK_WDT || why == ESP_RST_WDT
+                || why == ESP_RST_UNKNOWN;
+    if (crashed && muse_settings_debug_log()) {
+        ESP_LOGW(TAG, "last boot crashed: turning the Debug log switch off");
+        muse_settings_set_debug_log(false);
+    }
+    muse_crash_log_verbose(muse_settings_debug_log());
     muse_state_init();
     muse_battery_init();
     muse_state_set_caption("WAKING UP...");

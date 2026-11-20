@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "muse_crash_log.h"
 #include "muse_ui_watchdog.h"
 
 #include <stdatomic.h>
@@ -97,6 +98,10 @@ static void watch(void *arg)
          * task's stack -- and whatever it is blocked on -- is in it, under this
          * task's name as the one that crashed.
          */
+        /* The ring lives in .bss and so is in the dump regardless; printing
+         * it here costs nothing and saves the USB read-back whenever
+         * somebody does happen to have the port open. */
+        muse_crash_log_dump();
         abort();
     }
 }
