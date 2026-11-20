@@ -22,6 +22,7 @@
 
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_websocket_client.h"
@@ -244,25 +245,48 @@ void muse_radar_ais_stop(void)
     portEXIT_CRITICAL(&s_lock);
 }
 
+/* Retry backoff, so a stream that cannot open does not get asked twice a
+ * second for as long as the page is up. Doubles to a minute, then stays. */
+static uint32_t s_retry_at;
+static bool s_tried;    /* an open has been attempted and failed */
+static int s_retry_s = 2;
+
+bool muse_radar_ais_linked(void)
+{
+    if (s_ws && esp_websocket_client_is_connected(s_ws)) {
+        return true;
+    }
+    return !s_tried;    /* not yet tried reads as "still looking" */
+}
+
 void muse_radar_ais_poll(void)
 {
     if (!muse_radar_ais_have_key()) {
         return;
     }
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000000);
     if (!s_rx) {
-        s_rx = malloc(RX_BUF);
+        /* A 4 KB reassembly buffer has no business in internal RAM, which
+         * on this board is the scarce kind: 6-9 KB free, and fragmented. */
+        s_rx = heap_caps_malloc(RX_BUF, MALLOC_CAP_SPIRAM);
         if (!s_rx) {
             ESP_LOGE(TAG, "out of memory");
             return;
         }
     }
     if (!s_ws) {
+        if (s_retry_at && now < s_retry_at) {
+            return;
+        }
         esp_websocket_client_config_t cfg = {
             .uri = AIS_URL,
             .crt_bundle_attach = esp_crt_bundle_attach,
             .reconnect_timeout_ms = 10000,
             .network_timeout_ms = 10000,
-            .buffer_size = RX_BUF,
+            /* The client allocates a transmit and a receive buffer of this
+             * size from internal RAM. AIS position reports are a few hundred
+             * bytes, so 4 KB each was 8 KB spent to hold nothing. */
+            .buffer_size = 2048,
             .task_stack = 6144,
         };
         s_ws = esp_websocket_client_init(&cfg);
@@ -271,9 +295,20 @@ void muse_radar_ais_poll(void)
         }
         esp_websocket_register_events(s_ws, WEBSOCKET_EVENT_ANY, on_ws, NULL);
         if (esp_websocket_client_start(s_ws) != ESP_OK) {
-            ESP_LOGW(TAG, "could not open the stream");
+            ESP_LOGW(TAG, "could not open the stream (internal heap free %u, "
+                          "largest block %u)",
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
             esp_websocket_client_destroy(s_ws);
             s_ws = NULL;
+            s_tried = true;
+            s_retry_at = now + s_retry_s;
+            if (s_retry_s < 60) {
+                s_retry_s *= 2;
+            }
+        } else {
+            s_retry_s = 2;
+            s_retry_at = 0;
         }
         return;
     }

@@ -126,6 +126,8 @@ muse_radar_mode_t muse_radar_mode(void)
     return (muse_radar_mode_t)s_mode;
 }
 
+static void radar_reset(void);
+
 void muse_radar_set_mode(muse_radar_mode_t m)
 {
     if (m < 0 || m >= MUSE_RADAR_MODE_COUNT || m == muse_radar_mode()) {
@@ -133,7 +135,7 @@ void muse_radar_set_mode(muse_radar_mode_t m)
     }
     s_mode = m;
     nvs_put("mode", m);
-    muse_radar_refresh();
+    radar_reset();
 }
 
 const char *muse_radar_mode_name(muse_radar_mode_t m)
@@ -160,7 +162,7 @@ void muse_radar_set_place(int i)
     }
     s_place = i;
     nvs_put("place", i);
-    muse_radar_refresh();
+    radar_reset();
 }
 
 const muse_radar_place_t *muse_radar_place_at(void)
@@ -197,6 +199,20 @@ void muse_radar_get(muse_radar_sweep_t *out)
 
 void muse_radar_refresh(void)
 {
+    s_want = true;
+}
+
+/*
+ * Throws the last sweep away as well as asking for a new one. A change of
+ * mode or place makes the contacts on screen wrong rather than merely old:
+ * aircraft kept being drawn over the rain until the first weather tile
+ * landed, because the sweep behind them was still the one planes left.
+ */
+static void radar_reset(void)
+{
+    portENTER_CRITICAL(&s_lock);
+    memset(&s_sweep, 0, sizeof(s_sweep));
+    portEXIT_CRITICAL(&s_lock);
     s_want = true;
 }
 

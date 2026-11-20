@@ -34,5 +34,9 @@ bool muse_radar_ais_snapshot(muse_radar_sweep_t *out);
 void muse_radar_ais_stop(void);
 bool muse_radar_ais_have_key(void);
 
+/* False once the stream has been tried and would not open, so the page can
+ * say that rather than looking for contacts that will never arrive. */
+bool muse_radar_ais_linked(void);
+
 /* Drops the nearest-first target list in place. Shared by both sources. */
 void muse_radar_keep(muse_radar_sweep_t *s, const muse_radar_target_t *t);

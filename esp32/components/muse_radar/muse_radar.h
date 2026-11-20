@@ -108,9 +108,10 @@ void muse_radar_refresh(void);
 
 /*
  * Weather is a picture rather than a list of contacts: one RainViewer tile,
- * reprojected into the scope. The buffer is RGB565 at MUSE_RADAR_TILE_PX
+ * reprojected into the scope. The buffer is RGB565 at MUSE_RADAR_TILE_PX,
+ * which is the whole round display: the scope is the page.
  * square, or NULL until one has landed. Caller must not free it.
  */
-#define MUSE_RADAR_TILE_PX 304
+#define MUSE_RADAR_TILE_PX 466
 const uint16_t *muse_radar_rain(void);
 bool muse_radar_rain_fresh(void);

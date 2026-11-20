@@ -36,7 +36,7 @@ static const char *TAG = "radar";
  * image costs one object instead of eighty. Text stays as real labels on top,
  * so the font work is LVGL's.
  */
-#define PX   MUSE_RADAR_TILE_PX     /* 304 */
+#define PX   MUSE_RADAR_TILE_PX     /* 466: the whole screen */
 #define CTR  (PX / 2)
 #define RAD  (PX / 2 - 2)
 
@@ -58,10 +58,21 @@ static const char *TAG = "radar";
 
 static uint16_t *s_px;
 static lv_image_dsc_t s_dsc;
-static lv_obj_t *s_img, *s_title, *s_sub, *s_card, *s_card_id, *s_card_sub;
-static lv_obj_t *s_card_a, *s_tag[3];
+static lv_obj_t *s_img, *s_info, *s_pop, *s_pop_a, *s_pop_b, *s_pop_c;
+static lv_obj_t *s_tag[3];
 static uint32_t s_drawn_at = UINT32_MAX;
 static int s_drawn_n = -1;
+static uint32_t s_pop_until;    /* lv_tick at which the card goes away again */
+static volatile bool s_pop_show;/* bench() asked for it; tick() raises it */
+
+/* The icon sits where the speaker does on the face page: a chord's width in
+ * from the ring, high on the right, where a thumb reaches without covering
+ * the scope. INFO_PX matches that button's 36 px box. */
+#define INFO_PX   36
+#define INFO_Y    (-RAD * 5 / 8)
+#define INFO_D    (RAD - INFO_PX / 2 - 4)
+#define INFO_X    ((int)(0.5f + sqrtf((float)(INFO_D * INFO_D - INFO_Y * INFO_Y))))
+#define POP_MS    5000
 
 static inline uint16_t rgb(int r, int g, int b)
 {
@@ -216,6 +227,40 @@ static void draw_blip(float x, float y, float heading, float size, uint16_t c)
     tri(pts[0][0], pts[0][1], pts[1][0], pts[1][1], pts[2][0], pts[2][1], c);
 }
 
+/*
+ * What the page is showing, as a shape rather than a word, drawn into the
+ * scope just under the info icon. LVGL's symbol font has no aircraft, ship
+ * or cloud, and the rasteriser that draws the blips already draws these.
+ */
+static void draw_mode_icon(void)
+{
+    int cx = CTR + INFO_X, cy = CTR + INFO_Y + INFO_PX + 6;
+    switch (muse_radar_mode()) {
+    case MUSE_RADAR_SHIPS: {
+        /* A hull from the side, bow to the right, with a mast. */
+        float x = (float)cx, y = (float)cy;
+        tri(x - 11, y + 1, x + 13, y + 1, x + 7, y + 7, C_SHIP);
+        tri(x - 11, y + 1, x - 7, y + 7, x + 7, y + 7, C_SHIP);
+        line(cx - 1, cy - 9, cx - 1, cy, C_SHIP);
+        line(cx - 1, cy - 9, cx + 5, cy - 3, C_SHIP);
+        break;
+    }
+    case MUSE_RADAR_WEATHER:
+        /* A cloud of three discs with rain falling out of it. */
+        disc(cx - 6, cy - 2, 5, C_MID);
+        disc(cx + 1, cy - 5, 7, C_MID);
+        disc(cx + 8, cy - 2, 5, C_MID);
+        for (int i = -1; i <= 1; i++) {
+            line(cx + i * 6 - 1, cy + 5, cx + i * 6 - 3, cy + 10, C_LOW);
+        }
+        break;
+    case MUSE_RADAR_PLANES:
+    default:
+        draw_blip((float)cx, (float)cy, 0.0f, 12.0f, C_MID);
+        break;
+    }
+}
+
 static void draw_scope(const muse_radar_sweep_t *s)
 {
     float range = (float)muse_radar_range_nm();
@@ -281,6 +326,7 @@ static void draw_scope(const muse_radar_sweep_t *s)
     }
     ring(CTR, CTR, 7, C_MID);
     disc(CTR, CTR, 2, C_MID);
+    draw_mode_icon();
 
     lv_obj_invalidate(s_img);
 }
@@ -296,6 +342,15 @@ static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *font, uint32_t colour,
     lv_label_set_text(l, "");
     lv_obj_align(l, align, x, y);
     return l;
+}
+
+/* The info icon: one tap puts the card up, and tick() takes it down again. */
+static void on_info_clicked(lv_event_t *e)
+{
+    (void)e;
+    s_pop_until = lv_tick_get() + POP_MS;
+    lv_obj_move_foreground(s_pop);
+    lv_obj_clear_flag(s_pop, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void build(lv_obj_t *tile)
@@ -319,27 +374,38 @@ static void build(lv_obj_t *tile)
 
     s_img = lv_image_create(tile);
     lv_image_set_src(s_img, &s_dsc);
-    lv_obj_align(s_img, LV_ALIGN_CENTER, 0, 6);
+    lv_obj_center(s_img);
 
     const lv_font_t *cap = muse_page_caption_font();
-    s_title = label(tile, cap, TEXT_MID, LV_ALIGN_TOP_MID, 0, 18);
-    lv_label_set_text(s_title, "RADAR");
-    s_sub = label(tile, cap, TEXT_DIM, LV_ALIGN_TOP_MID, 0, 40);
 
-    s_card = lv_obj_create(tile);
-    lv_obj_remove_style_all(s_card);
-    lv_obj_set_size(s_card, 286, 48);
-    lv_obj_align(s_card, LV_ALIGN_BOTTOM_MID, 0, -26);
-    lv_obj_set_style_bg_color(s_card, lv_color_hex(0x06180f), 0);
-    lv_obj_set_style_bg_opa(s_card, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(s_card, 14, 0);
-    lv_obj_set_style_border_width(s_card, 1, 0);
-    lv_obj_set_style_border_color(s_card, lv_color_hex(0x135c3c), 0);
-    lv_obj_clear_flag(s_card, LV_OBJ_FLAG_SCROLLABLE);
+    /* No title and no permanent card: the scope is the page. Everything a
+     * caption used to say is one tap away and gone again in five seconds. */
+    s_info = label(tile, &lv_font_montserrat_28, TEXT_MID, LV_ALIGN_CENTER,
+                   INFO_X, INFO_Y);
+    lv_obj_set_size(s_info, INFO_PX, INFO_PX);
+    lv_obj_set_style_bg_color(s_info, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_info, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(s_info, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_text_align(s_info, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(s_info, "i");
+    lv_obj_add_flag(s_info, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(s_info, 12);
+    lv_obj_add_event_cb(s_info, on_info_clicked, LV_EVENT_CLICKED, NULL);
 
-    s_card_id  = label(s_card, cap, 0xeaffe9, LV_ALIGN_TOP_LEFT, 12, 6);
-    s_card_sub = label(s_card, cap, TEXT_DIM, LV_ALIGN_BOTTOM_LEFT, 12, -6);
-    s_card_a   = label(s_card, cap, TEXT_MID, LV_ALIGN_TOP_RIGHT, -12, 6);
+    s_pop = lv_obj_create(tile);
+    lv_obj_remove_style_all(s_pop);
+    lv_obj_set_size(s_pop, 250, 86);
+    lv_obj_align(s_pop, LV_ALIGN_CENTER, 0, -44);
+    lv_obj_set_style_bg_color(s_pop, lv_color_hex(0x06180f), 0);
+    lv_obj_set_style_bg_opa(s_pop, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(s_pop, 14, 0);
+    lv_obj_set_style_border_width(s_pop, 1, 0);
+    lv_obj_set_style_border_color(s_pop, lv_color_hex(0x135c3c), 0);
+    lv_obj_clear_flag(s_pop, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_pop, LV_OBJ_FLAG_HIDDEN);
+    s_pop_a = label(s_pop, cap, TEXT_MID, LV_ALIGN_TOP_MID, 0, 6);
+    s_pop_b = label(s_pop, cap, 0xeaffe9, LV_ALIGN_TOP_MID, 0, 30);
+    s_pop_c = label(s_pop, cap, TEXT_DIM, LV_ALIGN_TOP_MID, 0, 54);
 
     for (int i = 0; i < 3; i++) {
         s_tag[i] = label(tile, cap, TEXT_DIM, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -378,9 +444,9 @@ static void place_tags(const muse_radar_sweep_t *s, float range)
         uy[used] = y;
         lv_label_set_text(s_tag[used], s->t[i].id);
         lv_obj_clear_flag(s_tag[used], LV_OBJ_FLAG_HIDDEN);
-        /* The image is centred on the tile with a 6 px drop. */
+        /* The image is centred on the tile. */
         lv_obj_align(s_tag[used], LV_ALIGN_CENTER,
-                     (int)(x - CTR) + 28, (int)(y - CTR) + 6 - 10);
+                     (int)(x - CTR) + 28, (int)(y - CTR) - 10);
         used++;
     }
     for (int i = used; i < 3; i++) {
@@ -388,41 +454,58 @@ static void place_tags(const muse_radar_sweep_t *s, float range)
     }
 }
 
-static void show_card(const muse_radar_sweep_t *s)
+/*
+ * The card the info icon raises: where the scope is pointed on the first
+ * line, then the nearest contact. It is only filled while it is up, so a
+ * sweep that lands behind it costs nothing.
+ */
+static void fill_popup(const muse_radar_sweep_t *s)
 {
-    char buf[40];
-    if (muse_radar_mode() == MUSE_RADAR_WEATHER) {
-        lv_label_set_text(s_card_id, muse_radar_rain() ? "RAIN" : "NO PICTURE YET");
-        lv_label_set_text(s_card_sub, "RainViewer");
-        lv_label_set_text(s_card_a, "");
+    char buf[48];
+    snprintf(buf, sizeof(buf), "%d NM  %s", muse_radar_range_nm(),
+             muse_radar_place_at()->name);
+    lv_label_set_text(s_pop_a, buf);
+
+    if (!muse_wifi_connected()) {
+        lv_label_set_text(s_pop_b, "NO WI-FI");
+        lv_label_set_text(s_pop_c, "");
         return;
     }
-    if (muse_radar_mode() == MUSE_RADAR_SHIPS && !muse_radar_ais_have_key()) {
-        lv_label_set_text(s_card_id, "NO AIS KEY");
-        lv_label_set_text(s_card_sub, "aisstream.io key");
-        lv_label_set_text(s_card_a, "");
+    if (muse_radar_mode() == MUSE_RADAR_WEATHER) {
+        lv_label_set_text(s_pop_b, muse_radar_rain() ? "RAIN" : "NO PICTURE YET");
+        lv_label_set_text(s_pop_c, "RainViewer");
         return;
+    }
+    if (muse_radar_mode() == MUSE_RADAR_SHIPS) {
+        if (!muse_radar_ais_have_key()) {
+            lv_label_set_text(s_pop_b, "NO AIS KEY");
+            lv_label_set_text(s_pop_c, "aisstream.io key");
+            return;
+        }
+        if (!muse_radar_ais_linked()) {
+            lv_label_set_text(s_pop_b, "NO AIS LINK");
+            lv_label_set_text(s_pop_c, "no internal RAM");
+            return;
+        }
     }
     if (s->n == 0) {
-        lv_label_set_text(s_card_id, s->valid ? "NOTHING IN RANGE" : "LOOKING...");
-        lv_label_set_text(s_card_sub, "");
-        lv_label_set_text(s_card_a, "");
+        lv_label_set_text(s_pop_b, s->valid ? "NOTHING IN RANGE" : "LOOKING...");
+        lv_label_set_text(s_pop_c, "");
         return;
     }
     const muse_radar_target_t *t = &s->t[0];
-    lv_label_set_text(s_card_id, t->id[0] ? t->id : "-");
     if (muse_radar_mode() == MUSE_RADAR_SHIPS) {
-        snprintf(buf, sizeof(buf), "%.1f kn", (double)t->speed);
+        snprintf(buf, sizeof(buf), "%s  %.1f kn",
+                 t->id[0] ? t->id : "-", (double)t->speed);
     } else {
-        snprintf(buf, sizeof(buf), "%ld ft", (long)t->alt);
+        snprintf(buf, sizeof(buf), "%s  %ld ft",
+                 t->id[0] ? t->id : "-", (long)t->alt);
     }
-    lv_label_set_text(s_card_a, buf);
-    /* One bottom line, left-aligned: a right-aligned second label collided
-     * with the type on the left once speed and range were both spelled out. */
+    lv_label_set_text(s_pop_b, buf);
     snprintf(buf, sizeof(buf), "%s%s%.0fkt %.1fnm",
-             t->type[0] ? t->type : "", t->type[0] ? " " : "",
+             t->type[0] ? t->type : "", t->type[0] ? "  " : "",
              (double)t->speed, (double)t->dst);
-    lv_label_set_text(s_card_sub, buf);
+    lv_label_set_text(s_pop_c, buf);
 }
 
 static void tick(bool visible)
@@ -431,12 +514,6 @@ static void tick(bool visible)
     if (!visible || !s_px) {
         return;
     }
-    char sub[48];
-    snprintf(sub, sizeof(sub), "%s  %d NM  %s",
-             muse_radar_mode_name(muse_radar_mode()),
-             muse_radar_range_nm(), muse_radar_place_at()->name);
-    lv_label_set_text(s_sub, sub);
-
     muse_radar_sweep_t s;
     muse_radar_get(&s);
     bool weather = muse_radar_mode() == MUSE_RADAR_WEATHER;
@@ -452,9 +529,22 @@ static void tick(bool visible)
         s_drawn_at = s.at;
         s_drawn_n = s.n;
     }
-    show_card(&s);
-    if (!muse_wifi_connected()) {
-        lv_label_set_text(s_card_id, "NO WI-FI");
+    if (s_pop_show) {
+        s_pop_show = false;
+        lv_obj_move_foreground(s_pop);      /* over the contact tags */
+        lv_obj_clear_flag(s_pop, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (!lv_obj_has_flag(s_pop, LV_OBJ_FLAG_HIDDEN)) {
+        if ((int32_t)(lv_tick_get() - s_pop_until) >= 0) {
+            lv_obj_add_flag(s_pop, LV_OBJ_FLAG_HIDDEN);
+            s_drawn_at = UINT32_MAX;        /* puts the tags back next tick */
+        } else {
+            /* Tags under the card are unreadable clutter either way. */
+            for (int i = 0; i < 3; i++) {
+                lv_obj_add_flag(s_tag[i], LV_OBJ_FLAG_HIDDEN);
+            }
+            fill_popup(&s);
+        }
     }
 }
 
@@ -556,6 +646,12 @@ static void settings_value(char *out, size_t cap)
  */
 static bool bench(const char *arg)
 {
+    if (!strcmp(arg, "info")) {
+        /* Raises the card the icon raises. The console cannot tap. */
+        s_pop_until = lv_tick_get() + POP_MS;
+        s_pop_show = true;
+        return true;
+    }
     if (!strcmp(arg, "planes")) {
         muse_radar_set_mode(MUSE_RADAR_PLANES);
     } else if (!strcmp(arg, "ships")) {

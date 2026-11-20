@@ -1,6 +1,6 @@
 # Radar
 
-**Status:** all three modes built and running on the board
+**Status:** planes and weather run on the board; ships are blocked on internal RAM
 **Branch:** `feat/radar`
 **Last updated:** 2026-11-20
 
@@ -14,33 +14,102 @@ out of the swipe list entirely.
 
 ## On the board
 
-All three modes, flashed to the 1.75C and snapshotted over the serial console
-on 2026-11-20. These are the real screens, not the mockups above.
+Flashed to the 1.75C and snapshotted over the serial console on 2026-11-20.
+These are the real screens; the mockups that led to them are below.
 
-| Planes | Weather | Ships, with no key |
-|---|---|---|
-| ![](assets/radar-dev-planes.png) | ![](assets/radar-dev-weather.png) | ![](assets/radar-dev-ships.png) |
+| Planes | The info card | Weather | Ships, no link |
+|---|---|---|---|
+| ![](assets/radar-dev-planes.png) | ![](assets/radar-dev-info.png) | ![](assets/radar-dev-weather.png) | ![](assets/radar-dev-ships.png) |
+
+The scope is the page: no title, no permanent caption, no card. It fills the
+466 px round display edge to edge. What the captions used to say is behind the
+**i** in the top right — placed by the same chord maths as the speaker button
+on the face page — which raises a card for five seconds and takes it down
+again. Under the icon sits a glyph for what is being shown: an aircraft, a
+ship, or a cloud with rain under it, drawn by the same rasteriser as the
+blips, because LVGL's symbol font has none of the three.
 
 Measured while they ran:
 
-- **Planes: 77 of 168 aircraft kept** within 40 NM of the Bay Area, which is
-  the 80-target cap doing its job on a busy place — *(how: the page's own log
-  line over the serial console)*
+- **Planes: 80 of 187 aircraft kept** within 40 NM of the Bay Area — the
+  80-target cap doing its job on a busy place — *(how: the page's own log line)*
 - **Weather: `z=7, 4 of 4 tiles`.** RainViewer tiles decode, reproject and
-  recolour on the board, and the echoes on the screenshot sit where RainViewer
-  put them — *(how: same)*
+  recolour on the board — *(how: same)*
 - **The PNG decode needs 8 KB of stack.** It overflowed the radar task's
-  original 7,168 bytes outright; at 20,480 the high-water mark leaves 12,600
-  free. The stack is PSRAM, so the headroom costs nothing scarce. This answers
-  the "does the PNG decoder fit?" question below: it fits, but not on the
-  stack a JSON parse was sized for — *(how: a core dump, then
-  `uxTaskGetStackHighWaterMark`)*
-- **Ships degrade quietly without a key.** The page draws and says what is
-  missing rather than failing — the AIS key is still unset.
+  original 7,168 bytes outright; at 20,480 the high-water mark leaves 12,608
+  free. The stack is PSRAM, so the headroom costs nothing scarce — *(how: a
+  core dump, then `uxTaskGetStackHighWaterMark`)*
+- **Full screen costs 434 KB of PSRAM per layer.** Free PSRAM goes from
+  1,961 KB to 1,426 KB when weather allocates its rain layer beside the
+  scope — *(how: the link heartbeat either side of a mode change)*
+- **Ships do not link on this firmware.** See below; the key is not the
+  problem.
+
+### Ships are blocked on internal RAM, not on the key
+
+With a valid key in place the websocket never opens. The reason is specific
+and measured:
+
+- `esp_websocket_client` asks for a **6,144-byte task stack**, and creates it
+  with plain `xTaskCreate` — *(how: read `xTaskCreate` in
+  `esp_websocket_client.c` 1.2.3)*. `xTaskCreate` only ever allocates from
+  internal RAM.
+- Internal RAM on this build runs at **3–12 KB free with a largest free block
+  of 3,200–3,840 bytes** — *(how: `heap_caps_get_largest_free_block` logged at
+  each failure)*. A 6 KB contiguous request cannot be met, and TLS will not
+  fit in 3 KB either.
+- `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM` is already `y`, but it only
+  applies to `xTaskCreateStatic`, which this component does not use — *(how:
+  read the option's help text in `freertos/Kconfig`)*.
+
+Two things were moved out of internal RAM on the way to finding this, and both
+are worth keeping: the 4 KB AIS reassembly buffer now comes from PSRAM, and
+the client's own transmit and receive buffers went from 4 KB each to 2 KB,
+since AIS position reports are a few hundred bytes. Neither freed a large
+enough contiguous block.
+
+What would actually unblock it, in rough order of effort:
+
+1. **Free internal RAM elsewhere in the firmware.** The board runs at
+   `min=2K` internal across the whole system, so this is not a radar problem
+   and not a radar-sized fix.
+2. **Vendor `esp_websocket_client` into `components/`** and change its one
+   `xTaskCreate` to `xTaskCreateStatic` with a PSRAM stack buffer, which the
+   existing config already permits. Self-contained, but it forks a component.
+3. Drop ships.
+
+Until one of those happens the page says `NO AIS LINK / no internal RAM`
+rather than looking for contacts that cannot arrive.
 
 Driving it from the bench: `>page=radar:planes` / `:ships` / `:weather`,
-`>page=radar:12` / `:40` / `:250` / `:off`, `>page=radar:place=3`. The settings
-rows need a finger and a board on a bench has none.
+`>page=radar:12` / `:40` / `:250` / `:off`, `>page=radar:place=3`, and
+`>page=radar:info` to raise the card, since the console cannot tap.
+
+## The AIS key, and where it lives
+
+Ships are the one mode that needs a credential. Planes and weather need none.
+
+1. Sign in at <https://aisstream.io/account> with GitHub — free, no card.
+2. **Create API Key**, name it anything (`muse-gadget` does), and copy the
+   40-character hex string it gives you. It is shown in full on the account
+   page afterwards, so it does not have to be caught on first sight.
+3. Put it in `esp32/devices/sdkconfig.local`, which does not exist until you
+   make it and is gitignored:
+
+   ```
+   CONFIG_MUSE_RADAR_AIS_KEY="your-key-here"
+   ```
+
+4. `chmod 600` it and rebuild. `tools/muse/board.sh` appends that file to the
+   defaults list last, so it wins over every committed one.
+
+**It must not go in any other config file.** `sdkconfig.defaults` and
+everything under `devices/` except `sdkconfig.local` is committed, and a key
+pushed to a public repository is a key you have to rotate. The gitignore entry
+and the `board.sh` hook exist for exactly this.
+
+Left unset, Ships still draws its scope and says `NO AIS KEY` instead of
+pretending to have contacts.
 
 ## Mockup
 
@@ -315,11 +384,9 @@ absent in Ships.
 ## Blockers
 
 - Planes and weather: none, both run on the board.
-- Ships: an **aisstream.io key** (free, GitHub sign-in) into
-  `CONFIG_MUSE_RADAR_AIS_KEY`. The code path is written and the page degrades
-  to "NO AIS KEY" until one is set, so this is the only thing between here and
-  a third working mode. `esp_websocket_client` turned out to be in the
-  dependency graph already, which retired the deflate question.
+- Ships: **internal RAM**, not the key. A key is in place and the stream
+  still will not open; see "Ships are blocked on internal RAM" above for the
+  measurements and the three ways out.
 - The app binary is now **3.75 MB in a 4 MB `ota_0` slot**, ~250 KB of
   headroom. Worth watching before the next sizeable feature.
 
