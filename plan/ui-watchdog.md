@@ -1,7 +1,7 @@
 # A frozen screen that leaves something behind
 
 **Status:** working
-**Branch:** `feat/ui-hang-diagnosis`
+**Branch:** merged to `main`
 **Last updated:** 2026-11-20
 
 ## Goal
