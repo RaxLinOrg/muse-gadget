@@ -646,6 +646,19 @@ static void settings_value(char *out, size_t cap)
  */
 static bool bench(const char *arg)
 {
+    if (!strcmp(arg, "mem")) {
+        /* Internal RAM is the scarce kind on this board, and what matters is
+         * the largest contiguous block, not the total: a task stack needs one
+         * piece. Printed on demand so two builds can be compared at the same
+         * moment after boot. */
+        printf("@radar mem int free %u largest %u, psram free %u largest %u\n",
+               (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+               (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+        fflush(stdout);
+        return true;
+    }
     if (!strcmp(arg, "info")) {
         /* Raises the card the icon raises. The console cannot tap. */
         s_pop_until = lv_tick_get() + POP_MS;

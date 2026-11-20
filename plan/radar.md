@@ -68,22 +68,46 @@ the client's own transmit and receive buffers went from 4 KB each to 2 KB,
 since AIS position reports are a few hundred bytes. Neither freed a large
 enough contiguous block.
 
+**Freeing internal RAM does not work. This was measured, not assumed.**
+`muse_crash_log` keeps an 8,204-byte ring in `.bss`, which is the single
+largest reclaimable piece of internal RAM on the board. Building with
+`CONFIG_MUSE_CRASH_LOG=n` — the best case, the whole ring gone — gives this:
+
+| At a fixed probe 60 s after boot | With the ring | Without it |
+|---|---|---|
+| Largest free internal block | 2,944 / 3,712 / 4,096 / 4,096 | 8,192 / 9,216 / 10,752 / 3,968 |
+
+So removing it really does open a block big enough, three times in four, at
+that moment. But at the moment that matters — when Ships actually asks for
+its task — the largest block is **3,968 bytes without the ring against
+3,200–3,840 with it**. The 8 KB is reclaimed and then spent again during
+bring-up before the websocket is ever started. The stream still does not open.
+*(how: four boots each way, probed with `>page=radar:mem` at a fixed point,
+then the real attempt watched in both builds)*
+
+The lesson is the one the measurement was designed to catch: a bigger block at
+one moment is not a bigger block at the moment of use. Nobody should give up a
+crash log for this.
+
 What would actually unblock it, in rough order of effort:
 
-1. **Free internal RAM elsewhere in the firmware.** The board runs at
-   `min=2K` internal across the whole system, so this is not a radar problem
-   and not a radar-sized fix.
+1. ~~Free internal RAM elsewhere in the firmware.~~ Measured and dead, above.
 2. **Vendor `esp_websocket_client` into `components/`** and change its one
-   `xTaskCreate` to `xTaskCreateStatic` with a PSRAM stack buffer, which the
-   existing config already permits. Self-contained, but it forks a component.
+   `xTaskCreate` to `xTaskCreateStatic` with a PSRAM stack buffer, which
+   `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y` already permits. Self-
+   contained, but it forks a component. **This is the only route left that
+   does not depend on the rest of the firmware getting smaller.**
 3. Drop ships.
 
 Until one of those happens the page says `NO AIS LINK / no internal RAM`
 rather than looking for contacts that cannot arrive.
 
 Driving it from the bench: `>page=radar:planes` / `:ships` / `:weather`,
-`>page=radar:12` / `:40` / `:250` / `:off`, `>page=radar:place=3`, and
-`>page=radar:info` to raise the card, since the console cannot tap.
+`>page=radar:12` / `:40` / `:250` / `:off`, `>page=radar:place=3`,
+`>page=radar:info` to raise the card since the console cannot tap, and
+`>page=radar:mem` for free and largest-block internal and PSRAM at that
+instant — the largest block is what a task stack needs, and on this board it
+is the number that decides things.
 
 ## The AIS key, and where it lives
 
