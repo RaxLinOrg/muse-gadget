@@ -18,6 +18,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_heap_caps.h"
@@ -58,7 +59,7 @@ static const char *TAG = "radar";
 static uint16_t *s_px;
 static lv_image_dsc_t s_dsc;
 static lv_obj_t *s_img, *s_title, *s_sub, *s_card, *s_card_id, *s_card_sub;
-static lv_obj_t *s_card_a, *s_card_b, *s_tag[3];
+static lv_obj_t *s_card_a, *s_tag[3];
 static uint32_t s_drawn_at = UINT32_MAX;
 static int s_drawn_n = -1;
 
@@ -339,7 +340,6 @@ static void build(lv_obj_t *tile)
     s_card_id  = label(s_card, cap, 0xeaffe9, LV_ALIGN_TOP_LEFT, 12, 6);
     s_card_sub = label(s_card, cap, TEXT_DIM, LV_ALIGN_BOTTOM_LEFT, 12, -6);
     s_card_a   = label(s_card, cap, TEXT_MID, LV_ALIGN_TOP_RIGHT, -12, 6);
-    s_card_b   = label(s_card, cap, TEXT_DIM, LV_ALIGN_BOTTOM_RIGHT, -12, -6);
 
     for (int i = 0; i < 3; i++) {
         s_tag[i] = label(tile, cap, TEXT_DIM, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -395,34 +395,34 @@ static void show_card(const muse_radar_sweep_t *s)
         lv_label_set_text(s_card_id, muse_radar_rain() ? "RAIN" : "NO PICTURE YET");
         lv_label_set_text(s_card_sub, "RainViewer");
         lv_label_set_text(s_card_a, "");
-        lv_label_set_text(s_card_b, "");
         return;
     }
     if (muse_radar_mode() == MUSE_RADAR_SHIPS && !muse_radar_ais_have_key()) {
         lv_label_set_text(s_card_id, "NO AIS KEY");
-        lv_label_set_text(s_card_sub, "menuconfig: MUSE_RADAR_AIS_KEY");
+        lv_label_set_text(s_card_sub, "aisstream.io key");
         lv_label_set_text(s_card_a, "");
-        lv_label_set_text(s_card_b, "");
         return;
     }
     if (s->n == 0) {
         lv_label_set_text(s_card_id, s->valid ? "NOTHING IN RANGE" : "LOOKING...");
         lv_label_set_text(s_card_sub, "");
         lv_label_set_text(s_card_a, "");
-        lv_label_set_text(s_card_b, "");
         return;
     }
     const muse_radar_target_t *t = &s->t[0];
     lv_label_set_text(s_card_id, t->id[0] ? t->id : "-");
-    lv_label_set_text(s_card_sub, t->type[0] ? t->type : "");
     if (muse_radar_mode() == MUSE_RADAR_SHIPS) {
         snprintf(buf, sizeof(buf), "%.1f kn", (double)t->speed);
     } else {
         snprintf(buf, sizeof(buf), "%ld ft", (long)t->alt);
     }
     lv_label_set_text(s_card_a, buf);
-    snprintf(buf, sizeof(buf), "%.0f kt  %.1f nm", (double)t->speed, (double)t->dst);
-    lv_label_set_text(s_card_b, buf);
+    /* One bottom line, left-aligned: a right-aligned second label collided
+     * with the type on the left once speed and range were both spelled out. */
+    snprintf(buf, sizeof(buf), "%s%s%.0fkt %.1fnm",
+             t->type[0] ? t->type : "", t->type[0] ? " " : "",
+             (double)t->speed, (double)t->dst);
+    lv_label_set_text(s_card_sub, buf);
 }
 
 static void tick(bool visible)
@@ -548,6 +548,45 @@ static void settings_value(char *out, size_t cap)
              muse_radar_mode_name(muse_radar_mode()));
 }
 
+/*
+ * ">page=radar:weather", ":ships", ":planes", ":12" / ":40" / ":250" / ":off",
+ * ":place=3" — the settings rows need a finger, and a board on a bench has
+ * none. Runs on the console task; the setters only touch NVS and the worker,
+ * never LVGL, and tick() redraws from the sweep as usual.
+ */
+static bool bench(const char *arg)
+{
+    if (!strcmp(arg, "planes")) {
+        muse_radar_set_mode(MUSE_RADAR_PLANES);
+    } else if (!strcmp(arg, "ships")) {
+        muse_radar_set_mode(MUSE_RADAR_SHIPS);
+    } else if (!strcmp(arg, "weather")) {
+        muse_radar_set_mode(MUSE_RADAR_WEATHER);
+    } else if (!strcmp(arg, "off")) {
+        muse_radar_set_range_index(MUSE_RADAR_OFF);
+    } else if (!strncmp(arg, "place=", 6)) {
+        int i = atoi(arg + 6);
+        if (i < 0 || i >= MUSE_RADAR_PLACE_COUNT) {
+            return false;
+        }
+        muse_radar_set_place(i);
+    } else {
+        int nm = atoi(arg), hit = -1;
+        for (int i = 0; i < 3; i++) {
+            if (MUSE_RADAR_RANGES[i] == nm) {
+                hit = i;
+            }
+        }
+        if (hit < 0) {
+            return false;
+        }
+        muse_radar_set_range_index(hit);
+    }
+    printf("@radar %d %d nm %s\n", (int)muse_radar_mode(),
+           muse_radar_range_nm(), muse_radar_place_at()->name);
+    return true;
+}
+
 static const muse_page_t radar_page = {
     .name = "radar",
     .build = build,
@@ -557,5 +596,6 @@ static const muse_page_t radar_page = {
     .settings_icon = LV_SYMBOL_GPS,
     .settings_build = build_settings,
     .settings_value = settings_value,
+    .bench = bench,
 };
 MUSE_PAGE(radar_page);

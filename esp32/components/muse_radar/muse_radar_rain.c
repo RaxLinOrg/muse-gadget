@@ -25,6 +25,8 @@
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "png.h"
 
 static const char *TAG = "radar.rain";
@@ -329,6 +331,7 @@ bool muse_radar_rain_fetch(void)
     }
     free(png);
     s_fresh = ok > 0;
-    ESP_LOGI(TAG, "%s: z=%d, %d of 4 tiles", p->name, z, ok);
+    ESP_LOGI(TAG, "%s: z=%d, %d of 4 tiles, stack left %u",
+             p->name, z, ok, (unsigned)uxTaskGetStackHighWaterMark(NULL));
     return s_fresh;
 }

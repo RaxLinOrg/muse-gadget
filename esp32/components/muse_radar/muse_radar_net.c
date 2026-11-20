@@ -43,7 +43,9 @@ const int MUSE_RADAR_RANGES[MUSE_RADAR_RANGE_COUNT] = { 12, 40, 250 };
 #define NVS_NS "muse_radar"
 
 #define HTTP_TIMEOUT_MS 10000
-#define TASK_STACK      7168
+/* libpng's simplified reader is the deep one: the plane and ship paths sit
+ * under 4 KB, a weather tile decode overflowed 7 KB. The stack is PSRAM. */
+#define TASK_STACK      20480
 #define RETRY_EVERY_S   30
 
 /*
@@ -324,13 +326,11 @@ static bool stream_objects(esp_http_client_handle_t c, muse_radar_sweep_t *s)
         }
         for (int i = 0; i < n; i++) {
             char ch = chunk[i];
-            if (depth >= 2) {
-                if (olen < OBJ_MAX - 1) {
-                    obj[olen++] = ch;
-                } else {
-                    over = true;
-                }
-            }
+            /*
+             * The aircraft sit at depth 3: the root object, the "ac" array,
+             * then each object inside it. Depth is updated before the
+             * character is kept so an object's own braces land in its buffer.
+             */
             if (in_str) {
                 if (esc) {
                     esc = false;
@@ -339,26 +339,34 @@ static bool stream_objects(esp_http_client_handle_t c, muse_radar_sweep_t *s)
                 } else if (ch == '"') {
                     in_str = false;
                 }
-                continue;
-            }
-            if (ch == '"') {
+            } else if (ch == '"') {
                 in_str = true;
             } else if (ch == '{' || ch == '[') {
                 depth++;
-                if (depth == 2 && ch == '{') {
-                    obj[0] = '{';
-                    olen = 1;
+                if (depth == 3 && ch == '{') {
+                    olen = 0;
                     over = false;
                 }
             } else if (ch == '}' || ch == ']') {
+                if (depth >= 3 && olen < OBJ_MAX) {
+                    obj[olen++] = ch;
+                }
                 depth--;
-                if (depth == 1 && ch == '}') {
+                if (depth == 2 && ch == '}') {
                     s->total++;
                     muse_radar_target_t t;
                     if (!over && olen < OBJ_MAX && aircraft(obj, olen, &t)) {
                         muse_radar_keep(s, &t);
                     }
                     olen = 0;
+                }
+                continue;
+            }
+            if (depth >= 3) {
+                if (olen < OBJ_MAX - 1) {
+                    obj[olen++] = ch;
+                } else {
+                    over = true;
                 }
             }
         }

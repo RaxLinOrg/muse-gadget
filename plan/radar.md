@@ -1,6 +1,6 @@
 # Radar
 
-**Status:** mockup only
+**Status:** all three modes built and running on the board
 **Branch:** `feat/radar`
 **Last updated:** 2026-11-20
 
@@ -11,6 +11,36 @@ a radar scope over a coastline: aircraft overhead, ships in a strait, or where
 the rain is. One setting picks the range, one picks what to show, one picks the
 place, and the range setting's last position is **Off**, which takes the page
 out of the swipe list entirely.
+
+## On the board
+
+All three modes, flashed to the 1.75C and snapshotted over the serial console
+on 2026-11-20. These are the real screens, not the mockups above.
+
+| Planes | Weather | Ships, with no key |
+|---|---|---|
+| ![](assets/radar-dev-planes.png) | ![](assets/radar-dev-weather.png) | ![](assets/radar-dev-ships.png) |
+
+Measured while they ran:
+
+- **Planes: 77 of 168 aircraft kept** within 40 NM of the Bay Area, which is
+  the 80-target cap doing its job on a busy place — *(how: the page's own log
+  line over the serial console)*
+- **Weather: `z=7, 4 of 4 tiles`.** RainViewer tiles decode, reproject and
+  recolour on the board, and the echoes on the screenshot sit where RainViewer
+  put them — *(how: same)*
+- **The PNG decode needs 8 KB of stack.** It overflowed the radar task's
+  original 7,168 bytes outright; at 20,480 the high-water mark leaves 12,600
+  free. The stack is PSRAM, so the headroom costs nothing scarce. This answers
+  the "does the PNG decoder fit?" question below: it fits, but not on the
+  stack a JSON parse was sized for — *(how: a core dump, then
+  `uxTaskGetStackHighWaterMark`)*
+- **Ships degrade quietly without a key.** The page draws and says what is
+  missing rather than failing — the AIS key is still unset.
+
+Driving it from the bench: `>page=radar:planes` / `:ships` / `:weather`,
+`>page=radar:12` / `:40` / `:250` / `:off`, `>page=radar:place=3`. The settings
+rows need a finger and a board on a bench has none.
 
 ## Mockup
 
@@ -39,7 +69,7 @@ without the coast there is nothing to tell you *where* you are looking:
 
 ## What to show
 
-### Planes — ready to build
+### Planes
 
 Covered below in Findings: keyless, and the API returns range and bearing
 already computed.
@@ -284,24 +314,31 @@ absent in Ships.
 
 ## Blockers
 
-- Nothing blocks planes or weather.
-- Ships are blocked on the websocket + deflate question above.
+- Planes and weather: none, both run on the board.
+- Ships: an **aisstream.io key** (free, GitHub sign-in) into
+  `CONFIG_MUSE_RADAR_AIS_KEY`. The code path is written and the page degrades
+  to "NO AIS KEY" until one is set, so this is the only thing between here and
+  a third working mode. `esp_websocket_client` turned out to be in the
+  dependency graph already, which retired the deflate question.
+- The app binary is now **3.75 MB in a 4 MB `ota_0` slot**, ~250 KB of
+  headroom. Worth watching before the next sizeable feature.
 
 ## Open questions
 
-- **Does cJSON survive a 615 KB body on this board?** Needs measuring, not
-  reasoning. Until then 250 NM should cap the aircraft it keeps.
+- ~~Does cJSON survive a 615 KB body on this board?~~ Settled by not asking it
+  to: the response is parsed as it arrives, one aircraft object at a time, so
+  the body is never held. Only the kept targets cost memory.
 - **Supplier risk on the plane feed.** `github.com/adsblol/api` was archived by
   its owner on **2026-11-19** and warns a key will eventually be needed;
   airplanes.live has already closed its public API; `api.adsb.one` returned
   403. `opendata.adsb.fi` answered fine with the same field names and is the
   fallback — *(how: curl, all four, 2026-11-20)*. Keep the source behind one
   function.
-- Which place is the default? Bay Area in Planes mode is the one that looks
-  alive out of the box.
-- **Does the PNG decoder fit?** A 512px RGBA tile is 1 MB decoded. PSRAM has
-  room, but LVGL's decoder wants measuring on the board before weather mode is
-  promised.
+- Which place is the default? Shipped as Bay Area, Planes, 40 NM — the one
+  that looks alive out of the box.
+- ~~Does the PNG decoder fit?~~ Yes — libpng's simplified reader, not LVGL's,
+  decoding 256px tiles one at a time. See "On the board" above for what it
+  cost.
 - Should the device recolour the tile, or is RainViewer's own palette good
   enough? It has to decode the pixels either way, so recolouring to match the
   rest of the page is nearly free — the mockup above does it.
