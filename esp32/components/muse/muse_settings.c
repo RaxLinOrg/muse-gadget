@@ -42,6 +42,7 @@ static struct {
     bool wifi_on;
     bool ble_on;
     bool pet_on;
+    bool debug_log;
     char ssid[MUSE_SSID_MAX + 1];
     char pass[MUSE_PASS_MAX + 1];
     char host[MUSE_HOST_MAX + 1];
@@ -130,6 +131,9 @@ esp_err_t muse_settings_init(void)
         atomic_store(&s_voice_notes, b != 0);
     }
 #endif
+    if (nvs_get_u8(s_nvs, "debug_log", &b) == ESP_OK) {
+        s.debug_log = b;
+    }
     load_u8("bright", &s.brightness);
     nvs_get_u16(s_nvs, "sleep_s", &s.sleep_s);
     if (nvs_get_u8(s_nvs, "wifi_on", &b) == ESP_OK) {
@@ -169,6 +173,15 @@ int muse_settings_brightness(void) { return s.brightness; }
 int muse_settings_sleep_s(void) { return s.sleep_s; }
 bool muse_settings_wifi_on(void) { return s.wifi_on; }
 bool muse_settings_ble_on(void) { return s.ble_on; }
+bool muse_settings_debug_log(void) { return s.debug_log; }
+
+void muse_settings_set_debug_log(bool on)
+{
+    s.debug_log = on;
+    save_u8("debug_log", on);
+    notify(MUSE_SETTING_DEBUG_LOG);
+}
+
 bool muse_settings_voice_notes(void) { return atomic_load(&s_voice_notes); }
 
 void muse_settings_set_voice_notes(bool on)

@@ -27,6 +27,14 @@ CONFIG_HOMEHUB_LED_BACKEND_MUSE=y
 # community devices by this name, and only with hatch_link.community_devices on.
 CONFIG_HOMEHUB_BLE_NAME_PREFIX="MuseGadget"
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_muse.csv"
+# A panic writes the stuck task and every other task's backtrace to the
+# coredump partition, so a freeze can be read back over USB long afterwards
+# (idf.py coredump-info) instead of only in a serial log nobody was capturing.
+# Both partitions_muse.csv and partitions_muse_8mb.csv carry the partition.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=32
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 # These boards ship Link with OTA on.

@@ -70,4 +70,9 @@ void muse_ui_bench_page(int index);
 void muse_ui_bench_sub(int index);
 /* Display-only demo name for privacy-safe screenshots; no provisioning changes. */
 void muse_ui_bench_demo(bool enabled);
+/* Bench-only: block the UI task for `secs`, which is what a deadlocked screen
+ * looks like from the outside. There to prove the UI watchdog fires, and to
+ * see what its core dump actually contains, without waiting for a real one. */
+void muse_ui_bench_hang(int secs);
+void muse_ui_bench_scroll(int y);
 #endif
