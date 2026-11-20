@@ -23,3 +23,7 @@ ota_0,     app,  ota_0,   0x20000,  0x3E0000,
 ota_1,     app,  ota_1,   0x400000, 0x3E0000,
 prod_data, data, 0x40,    0x7E0000, 0x1000,
 prod_bak,  data, 0x41,    0x7E1000, 0x1000,
+# A panic writes the stuck task and its backtrace here, so a freeze can be read
+# back over USB days later instead of only in a serial log nobody was capturing.
+# It sits after the app slots and the product data, so nothing above it moves.
+coredump,  data, coredump, 0x7E2000, 0x10000,

@@ -47,6 +47,7 @@ typedef enum {
     MUSE_SETTING_HATCH,
     MUSE_SETTING_VOICE_NOTES,
     MUSE_SETTING_PET,
+    MUSE_SETTING_DEBUG_LOG,
 } muse_setting_t;
 
 typedef void (*muse_setting_cb_t)(muse_setting_t what);
@@ -62,6 +63,9 @@ int muse_settings_sleep_s(void);        /* 0 = never */
 bool muse_settings_wifi_on(void);
 bool muse_settings_ble_on(void);
 /* StopWatch: false selects realtime PTT; true selects voice notes only. */
+bool muse_settings_debug_log(void);   /* the Debug log switch in Settings */
+void muse_settings_set_debug_log(bool on);
+
 bool muse_settings_voice_notes(void);
 void muse_settings_set_voice_notes(bool on);
 

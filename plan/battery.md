@@ -2,7 +2,7 @@
 
 **Status:** working, verified on hardware
 **Branch:** `feat/battery-top-icon` — merged to `main` in #7
-**Last updated:** 2026-11-03
+**Last updated:** 2026-11-20
 
 **Note on the images:** all four PNGs are on the branch, added from a
 local checkout — the GitHub MCP file tools cannot push binary PNGs (a
@@ -185,6 +185,27 @@ working until that happens.
   status row and a caption band over the bottom of the face; their
   sizing is out of scope until checked, not assumed to fit.
 
+### The unfilled column on the left, 2026-11-20
+
+![Before and after, the battery at 9x](assets/battery-fill-left.png)
+
+- **The fill started two pixels inside the border, not flush with it** —
+  *(how: Rax spotted a dark column on the panel; confirmed by reading the
+  pixels out of `assets/battery-capture.png`)*. At the middle row the
+  capture goes border, border, **black, black**, then fill. The cause is one
+  line: `lv_obj_align(s_batt_fill, LV_ALIGN_LEFT_MID, 2, 0)`. LVGL measures
+  `LV_ALIGN_*` from the parent's *content* area, which already excludes the
+  2 px border, so the extra 2 counted the border twice.
+- **It was eating the right-hand side too.** The fill is sized
+  `(BATT_W - 4) * pct / 100`, the exact width of the inner area, so pushing
+  it 2 px right ran it under the right border at high percentages. The icon
+  looked full at 100% only because the border is drawn over the overflow.
+- **Dropping the offset fixes both** — *(how: `>ui=face` on the bench build,
+  pixels read back)*. Red now runs unbroken from the left border into the
+  fill, and the fill ends exactly where the right border begins. Only the x
+  offset was wrong: the height is `BATT_H - 4` and centred, which is already
+  right.
+
 ## Blockers
 
 None — only the confirmation in the open question below.
@@ -231,4 +252,6 @@ None on placement.
 - `plan/assets/battery-charging.png` — the charging bolt, from the same
   capture
 - `plan/assets/battery-states.png` — mockup: the three colour bands
+- `plan/assets/battery-fill-left.png` — the left-hand column bug and its
+  fix, both captures at 9x
 - [status-row.md](status-row.md) — PR #6, which this reworks

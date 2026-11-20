@@ -25,3 +25,11 @@ ota_0,     app,  ota_0,   0x20000,  4M,
 ota_1,     app,  ota_1,   0x420000, 4M,
 prod_data, data, 0x40,    0x820000, 0x1000,
 prod_bak,  data, 0x41,    0x821000, 0x1000,
+# A panic writes the stuck task and its backtrace here, so a freeze can be read
+# back over USB days later instead of only in a serial log nobody was capturing.
+# It sits after the app slots and the product data, so nothing above it moves.
+# 512 KB, not the 64 KB the backtraces alone need: ESP_COREDUMP_CAPTURE_DRAM
+# adds the whole of .bss and .data, which is what carries muse_crash_log's
+# ring of the last log lines. The flash above this is unused on every board
+# that takes this table (16 MB and up), so the room is free.
+coredump,  data, coredump, 0x822000, 0x80000,

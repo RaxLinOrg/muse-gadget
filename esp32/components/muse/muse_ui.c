@@ -46,6 +46,7 @@
 #include "muse_settings.h"
 #include "muse_settings_ui.h"
 #include "muse_state.h"
+#include "muse_ui_watchdog.h"
 #include "muse_text.h"
 #include "muse_wifi.h"
 #include "muse_voice.h"
@@ -1334,7 +1335,12 @@ static void build_screen(void)
         s_batt_fill = make_box(s_batt_outline, 0, BATT_H - 4);
         lv_obj_set_style_bg_color(s_batt_fill, lv_color_hex(COLOR_BATT_GREEN), 0);
         lv_obj_set_style_bg_opa(s_batt_fill, LV_OPA_COVER, 0);
-        lv_obj_align(s_batt_fill, LV_ALIGN_LEFT_MID, 2, 0);
+        /* No x offset: LV_ALIGN_LEFT_MID is already measured from the
+         * outline's content area, which starts inside the 2 px border. The
+         * 2 that used to be here counted the border twice, leaving a dark
+         * column between the border and the fill -- and, at 100%, running
+         * the fill under the border on the right to make up for it. */
+        lv_obj_align(s_batt_fill, LV_ALIGN_LEFT_MID, 0, 0);
 
         s_batt_bolt_bg = make_label(s_batt_outline, &lv_font_montserrat_16, COLOR_LIT);
         lv_label_set_text(s_batt_bolt_bg, LV_SYMBOL_CHARGE);
@@ -2066,6 +2072,22 @@ void muse_ui_bench_sub(int index)
 {
     s_bench_sub = index;
 }
+
+static volatile int s_bench_hang;
+
+static volatile int s_bench_scroll = -1;
+
+/* >ui.scroll=<px> on the console: the settings page cannot be dragged from
+ * the port, and the rows worth a screenshot are often below the fold. */
+void muse_ui_bench_scroll(int y)
+{
+    s_bench_scroll = y;
+}
+
+void muse_ui_bench_hang(int secs)
+{
+    s_bench_hang = secs;   /* taken up by the frame timer, on the UI task */
+}
 #endif
 
 /* Streams the screen over the USB cable as base64 RGB565 (bench testing; needs
@@ -2113,11 +2135,31 @@ void muse_ui_request_snapshot(void)
 
 static void frame_tick(lv_timer_t *timer)
 {
+    /* Before anything else in the frame: this is the pulse the UI watchdog
+ * reads, and it should mean "the timer ran", not "the frame finished". */
+    muse_ui_watchdog_beat();
+
+#if LV_USE_SNAPSHOT
+    if (s_bench_hang > 0) {
+        int secs = s_bench_hang;
+        s_bench_hang = 0;
+        /* A delay, not a spin: a UI task waiting on a mutex it will never get
+         * is blocked, not busy, and the two look different to everything that
+         * might notice -- the idle task keeps running, which is exactly why
+         * the ordinary task watchdog would not see this. */
+        vTaskDelay(pdMS_TO_TICKS(secs * 1000));
+    }
+#endif
 #if LV_USE_SNAPSHOT
     if (s_bench_page >= 0) {
         int want = s_bench_page < s_tile_n ? s_bench_page : s_tile_n - 1;
         s_bench_page = -1;
         if (s_tv) lv_tileview_set_tile(s_tv, s_tile_obj[want], LV_ANIM_OFF);
+    }
+    if (s_bench_scroll >= 0) {
+        int y = s_bench_scroll;
+        s_bench_scroll = -1;
+        muse_settings_ui_bench_scroll(y);
     }
     if (s_bench_sub >= 0) {
         /* Settings has to be the tile on screen and built, so send >ui=settings
@@ -2256,6 +2298,7 @@ esp_err_t muse_ui_start(void)
     }
     build_overlays();
     lv_timer_create(frame_tick, muse_board->frame_ms, NULL);
+    muse_ui_watchdog_start();
     s_ready = true;
     muse_board->display_unlock();
 
