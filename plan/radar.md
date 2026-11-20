@@ -164,6 +164,60 @@ settings, which is where the three choices live:
 - **Show** — `Planes` / `Ships` / `Weather`.
 - **Place** — the table above.
 
+## How often it refreshes
+
+The proposal was one interval per range — hourly at 250 NM, every 30 minutes at
+40 NM, every 1–5 minutes at 12 NM — on the assumption that this keeps clear of
+the rate limit. It does, by a wide margin. The problem is the other end: those
+intervals are slow enough that the page stops being a radar and becomes a
+series of unrelated snapshots.
+
+![How far a blip moves between refreshes](assets/radar-cadence.png)
+
+Measured rather than reasoned: two samples 92 seconds apart over the Bay Area,
+313 aircraft matched by hex. The median one moved **6.43 nm**, which is
+4.2 nm per minute. The scope is 300 px across. So:
+
+| Range | Crossing time | Proposed | Jump per refresh | Suggested | Jump |
+|---|---|---|---|---|---|
+| 12 NM | 3.2 min | 5 min | 262 px — off the scope | **30 s** | 26 px |
+| 12 NM | | 1 min | 53 px | | |
+| 40 NM | 10.7 min | 30 min | 471 px — off the scope | **60 s** | 16 px |
+| 250 NM | 66.7 min | 1 hour | 151 px — half the scope | **5 min** | 13 px |
+
+**The direction of the idea is right** — wide views genuinely do tolerate
+slower refresh, because a 450 kt aircraft needs 67 minutes to cross 250 NM but
+only 3.2 to cross 12 NM. The magnitudes are about 10x too slow. At 40 NM every
+30 minutes, each refresh replaces the entire picture: 7% of targets had already
+churned in 92 seconds, and over half an hour nothing on screen would be the
+same aircraft twice. Of the two options at 12 NM, **1 minute is the right one**
+and 5 minutes is not — at 5 minutes a plane enters and leaves between frames.
+
+**The rate limit does not require slowing down, because the page only polls
+while it is visible.** At a 30-second refresh, adsb.lol's 500/day buys 4 hours
+of looking; at 60 seconds, 8 hours. Nobody watches a desk gadget for 4 hours.
+What the limit rules out is background polling, which is already out — and the
+freshness worry it was meant to solve is better handled by refreshing **once
+when the page becomes visible**, then settling into the cadence above. That
+costs one request per visit instead of 24 a day per place.
+
+### It only applies to planes
+
+- **Weather has no choice in the matter.** RainViewer publishes a frame every
+  **600 seconds exactly**, and the newest frame was already 5.4 minutes old
+  when fetched. Polling faster than 10 minutes re-downloads an identical tile;
+  polling hourly skips five frames. So weather is 10 minutes at every range,
+  and the range setting changes the zoom, not the cadence.
+- **Ships have no refresh interval at all.** AIS over `aisstream.io` is a
+  WebSocket stream — positions arrive when vessels transmit, which under the
+  AIS standard is every 2–10 seconds for a moving Class A ship. There is
+  nothing to poll; the only knob is how often the screen redraws, and a second
+  is plenty.
+
+So the setting should not be a user-facing "refresh every N". It should be a
+property of the range in Planes mode, fixed at 10 minutes in Weather, and
+absent in Ships.
+
 ## Plan
 
 1. New component `muse_radar`, modelled on `muse_clock` — own NVS namespace,
@@ -190,8 +244,14 @@ settings, which is where the three choices live:
   projecting, but only once, at build time — *(how: read the fields; checked
   `dir` against an aircraft known to be southwest of Taipei, 242.7°)*
 - **500 requests per IP per day**, from `x-ratelimit-limit: 500, 500;w=86400`
-  on the live response. Hence polling only while the page is visible —
-  *(how: response headers)*
+  on the live response. Visible-only polling at 30 s buys ~4 hours of watching
+  a day — *(how: response headers)*
+- **The median aircraft moves 4.2 nm a minute.** Two samples 92 s apart over
+  the Bay Area, 313 targets matched by hex: median 6.43 nm, p90 11.8 nm, and 7%
+  of targets churned out of the set in that time — *(how: diffed the two
+  samples)*
+- **RainViewer publishes every 600 s**, 13 frames covering 2 hours, newest
+  frame 5.4 minutes old at fetch — *(how: timestamps in weather-maps.json)*
 - **Open-Meteo bills per location, not per request.** It accepts many
   coordinates at once (441 points, 150 KB, 338 ms) but the response carries
   `X-RateLimit-Limit: 600` on a 60-second window, and three grids totalling 766
