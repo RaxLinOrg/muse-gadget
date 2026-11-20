@@ -48,8 +48,14 @@ already computed.
 
 ![Ships in the Malacca Strait](assets/radar-ships.png)
 
-*Illustrative: the hulls above are drawn on plausible lane positions, not live
-AIS. Everything else on this page comes from real data.*
+Drawn the way a ship's own ARPA display does it, since that is the look worth
+copying: a bearing scale in degrees around the rim, own-ship heading line, each
+contact as an echo smear with the AIS triangle over it, a vector showing where
+it will be in ten minutes, and a dotted past track. The bottom strip carries
+bearing, range and speed over ground for the ringed target.
+
+*Illustrative: the contacts are on plausible lane positions, not live AIS.
+Everything else in this file comes from real data.*
 
 AIS is a different kind of feed from the plane one. `aisstream.io` is free, but:
 
@@ -70,57 +76,79 @@ different blips"; they are a websocket client plus a deflate negotiation.
 AISHub is not an option at all: it gives API keys only to people who feed it
 their own receiver's data.
 
-### Weather — the cheapest of the three
+### Weather — a real radar picture, from a tile
 
-![Precipitation around the Malacca Strait](assets/radar-weather.png)
+![Rain over the Taiwan Strait](assets/radar-weather.png)
 
-Not rain-radar imagery — that means raster tiles, projection and compositing,
-and RainViewer's terms are personal-use-only anyway. Instead: **sample a polar
-grid from Open-Meteo**, which this firmware already talks to for the weather
-page. It accepts a list of coordinates in one request, so 24 points (8 bearings
-x 3 rings) come back as one 9 KB response in 190 ms with no key, and each wedge
-is coloured by its own `precipitation`.
+That is live RainViewer data, composited and recoloured exactly the way the
+firmware would: one PNG tile, decoded, re-mapped to a green/yellow/red scale,
+masked to the scope, with the coastline drawn over it. The rain southwest of
+Taiwan was really there when it was sampled.
 
-The image above is real: 6 of those 24 cells had rain at Malacca when it was
-sampled. 24 cells is coarse — it tells you rain is to the southeast, not where
-the edge of the squall is — but it is one request against a 10,000/day budget
-rather than 500.
+**This replaces the polar-grid idea, and the reason is a rate limit.** The
+first plan was to sample Open-Meteo on a polar grid, since the firmware already
+talks to it. Open-Meteo does accept many coordinates in one request — 441
+points came back in 150 KB in 338 ms. But its response headers say
+`X-RateLimit-Limit: 600` over a 60-second window, and **it bills per location,
+not per request**: three test grids in one minute (766 points) took the
+remaining quota to zero. A 441-point grid is 441 calls against a 10,000/day
+free allowance — about **22 refreshes a day**. Resolution trades directly
+against refresh rate, and the resolution you can afford looks like this:
+
+![The 24-cell version this replaces](assets/radar-weather-grid.png)
+
+A RainViewer tile costs **one request** no matter how much detail is in it.
+
+What it costs: 11.5 KB for a 256px tile, 32 KB for 512px, no key needed. The
+device has to decode PNG (RGBA8, so a 512px tile is 1 MB decoded — PSRAM
+territory, not internal RAM) and reproject from Web Mercator, which is a dozen
+lines. Zoom is capped: z=7 works, **z=8 returns a "Zoom Level Not Supported"
+placeholder image**, so the tightest useful view is about 40 nm across and
+12 NM range would be showing a blown-up z=7 tile.
+
+Terms: RainViewer's API is personal and educational use only, with attribution
+asked for — hence "RainViewer" in the corner of the mockup. That is fine for a
+gadget on a desk and would not be fine for a product.
 
 ## Where to point it
 
-All eight of the suggested places, 250 nm each, sampled the same afternoon:
+All ten places, 250 nm each, sampled the same afternoon:
 
-![Eight places compared](assets/radar-places.png)
-
-This settles the list, and the answer is that **place and mode are coupled**:
+![Ten places compared](assets/radar-places.png)
 
 | Place | Airborne | Verdict |
 |---|---|---|
-| New York | 1,199 | Too many — 615 KB per refresh |
-| Los Angeles | 755 | Very busy, 375 KB |
-| Bay Area | 449 | Busy, 217 KB |
-| Hormuz | 62 | Thin for planes, interesting for ships |
-| Taiwan Strait | 34 | Thin for planes, the point is the shipping |
-| Malacca | 20 | Likewise |
+| New York | 1,002 | Too many — 615 KB per refresh |
+| Texas (DFW) | 860 | Too many — 476 KB |
+| Los Angeles | 583 | Very busy, 375 KB |
+| Bay Area | 312 | Busy, 217 KB |
+| Hormuz | 46 | Thin for planes, interesting for ships |
+| Korea | 34 | Thin — see below |
+| Taiwan Strait | 33 | Thin — see below |
+| Japan | 33 | Thin — see below |
+| Malacca | 20 | The point here is the shipping |
 | Panama Canal | 5 | Planes: nothing. Ships: the whole point |
-| **Ukraine** | **0** | **Nothing at all** |
 
-Two of these are worth knowing before building anything:
+Three things this settles:
 
-- **Ukraine returns zero aircraft.** Civil airspace is closed and military
-  traffic does not broadcast ADS-B. The page would be an empty green circle.
-  There is no fix on our side — it is what the data is. Worth keeping on the
-  list only once ships are in, and even then AIS in the Black Sea is patchy and
-  routinely spoofed.
-- **New York at 250 nm returns 1,199 aircraft in a 615 KB body.** The weather
-  page's whole body cap is 8 KB. Holding 615 KB is fine in PSRAM; what is not
-  obviously fine is cJSON, which builds a DOM several times the size of the
-  text. This needs measuring on the board before 250 nm ships, and the likely
-  answer is a cap on how many aircraft are kept, taking the nearest N.
+- **East Asia is thin because of who is feeding, not what is flying.** Tokyo
+  returning 33 airborne aircraft inside 250 nm is not believable — Haneda alone
+  moves well over a thousand a day. ADS-B aggregators are fed by volunteers
+  with receivers, and there are far fewer of them in Japan, Korea and Taiwan
+  than in the US. Cross-checked against a completely separate network,
+  `opendata.adsb.fi`, which gave 45 / 43 / 40 for Japan / Korea / Taiwan
+  against 468 for the Bay Area — the same ratio. So a Taiwan or Japan radar
+  page will look quiet, and that is the data, not a bug. The page should never
+  imply it is showing all the traffic.
+- **Texas behaves like New York and Los Angeles**: 860 airborne in a 476 KB
+  body. The big-metro cap applies to it too.
+- **Panama has 5 aircraft.** Picking it in Planes mode is close to an empty
+  screen; it earns its place in the list through Ships, and the page should
+  say "5 aircraft" rather than look broken.
 
-So the place list should be the straits and canals *and* the metros, with the
-understanding that picking Panama in Planes mode shows you almost nothing. The
-page should say "5 aircraft" rather than look broken.
+Ukraine is gone from the list. It returned **zero** aircraft — closed civil
+airspace, and military traffic does not broadcast ADS-B — so there was nothing
+to show and no fix available on our side.
 
 ## Config
 
@@ -129,7 +157,8 @@ settings, which is where the three choices live:
 
 ![Settings](assets/radar-config.png)
 
-- **Range** — `12 NM` / `40 NM` / `250 NM` / `Off`. Off is a real off:
+- **Range** — `12 NM` / `40 NM` / `250 NM` / `Off`. Note that in Weather mode
+  12 NM is a magnified z=7 tile rather than more detail. Off is a real off:
   `muse_page_t.enabled()` is checked before the tile is built, so the page
   leaves the swipe list and its task never starts. No page, no polling.
 - **Show** — `Planes` / `Ships` / `Weather`.
@@ -145,7 +174,9 @@ settings, which is where the three choices live:
 3. Planes first: `esp_http_client` + `cJSON`, the `muse_weather.c` shape, with
    a cap on aircraft kept.
 4. Draw: coastline, rings, blips, the nearest one ringed with a card below.
-5. Weather second — same fetch code, different URL, 24 points, wedges.
+5. Weather second: one RainViewer tile, a PNG decoder, Web Mercator
+   reprojection into the scope, and our own colour ramp over the decoded
+   pixels. Check what LVGL's PNG decoder costs in heap before committing.
 6. Ships last, and only if the websocket question answers well.
 
 ## Findings
@@ -161,17 +192,30 @@ settings, which is where the three choices live:
 - **500 requests per IP per day**, from `x-ratelimit-limit: 500, 500;w=86400`
   on the live response. Hence polling only while the page is visible —
   *(how: response headers)*
-- **Open-Meteo takes 24 coordinates in one request.** 9 KB, 190 ms, no key, and
-  it returns a list in the order asked — *(how: curl with 24 comma-separated
-  lat/lon pairs; 6 of 24 cells wet at Malacca)*
+- **Open-Meteo bills per location, not per request.** It accepts many
+  coordinates at once (441 points, 150 KB, 338 ms) but the response carries
+  `X-RateLimit-Limit: 600` on a 60-second window, and three grids totalling 766
+  points in one minute drove `X-RateLimit-Remaining` to 0. Against a 10,000/day
+  free allowance a 441-point grid buys ~22 refreshes a day — *(how: response
+  headers while testing 100, 225 and 441-point grids)*
+- **A RainViewer tile is one request at any resolution.** 11.5 KB at 256px,
+  32 KB at 512px, no key, PNG RGBA8. Zoom caps out: z=7 serves data, **z=8
+  returns a 1,370-byte "Zoom Level Not Supported" image** — *(how: fetched
+  tiles for five places at z=6, 7 and 8 and looked at them)*
+- **East Asian ADS-B coverage is roughly a tenth of the US.** Japan 33, Korea
+  34, Taiwan 33 airborne within 250 nm against the Bay Area's 312 — and the
+  same ratio on an unrelated network (adsb.fi: 45 / 43 / 40 against 468). It is
+  feeder density, not traffic — *(how: queried both networks for the same four
+  places within a minute of each other)*
 - **Coastlines are nearly free.** Natural Earth 50m clipped to 250 nm:
   Bay Area 165 points, Hormuz 200, Taiwan Strait 283, Panama 323, Malacca 532,
   New York 601 — 660 to 2,404 bytes each as int16 pairs — *(how: clipped the
   1.6 MB GeoJSON locally and counted)*
 - **`alt_baro` is an int *or* the string `"ground"`.** 98 of 192 aircraft
   within 60 nm of San Jose were parked — *(how: counted in the sample)*
-- **New York at 250 nm is 1,199 aircraft / 615 KB; Ukraine is 0 / 101 bytes** —
-  *(how: the eight-place sample above)*
+- **New York at 250 nm is 1,199 aircraft in a 615 KB body, Texas 911 / 476 KB,
+  and Ukraine 0 in 101 bytes** — *(how: the ten-place sample above, plus
+  Ukraine before it was dropped)*
 - **ESP-IDF has no permessage-deflate.** Nothing in the v6.0.1 component tree
   matches it, and `esp_websocket_client` is not in the tree at all — *(how:
   grepped `~/esp/esp-idf-v6.0.1/components`)*
@@ -195,6 +239,12 @@ settings, which is where the three choices live:
   function.
 - Which place is the default? Bay Area in Planes mode is the one that looks
   alive out of the box.
+- **Does the PNG decoder fit?** A 512px RGBA tile is 1 MB decoded. PSRAM has
+  room, but LVGL's decoder wants measuring on the board before weather mode is
+  promised.
+- Should the device recolour the tile, or is RainViewer's own palette good
+  enough? It has to decode the pixels either way, so recolouring to match the
+  rest of the page is nearly free — the mockup above does it.
 
 ## References
 
@@ -204,6 +254,7 @@ settings, which is where the three choices live:
 - Page contract: `esp32/components/muse/muse_page.h`
 - Data: [adsb.lol](https://api.adsb.lol/v2/point/), [adsb.fi](https://opendata.adsb.fi/),
   [aisstream.io](https://aisstream.io/documentation),
+  [RainViewer](https://www.rainviewer.com/api.html),
   [Open-Meteo](https://api.open-meteo.com/v1/forecast),
   [Natural Earth coastline](https://github.com/nvkelso/natural-earth-vector)
 - Prior art: [Alex-developer/ADSB-Radar](https://github.com/Alex-developer/ADSB-Radar)
