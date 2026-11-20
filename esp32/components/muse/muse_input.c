@@ -871,6 +871,22 @@ static bool console_command(char *line, bool whole)
         muse_ui_bench_sub(line[7] - '0');
         return true;
     }
+    /* ">ui.hang=12" blocks the UI task for twelve seconds, which is what a
+     * deadlocked screen looks like: frames stop, the idle task carries on.
+     * With CONFIG_MUSE_UI_WATCHDOG on, that is how you check the watchdog
+     * fires and see what its core dump holds. */
+    if (!strncmp(line, "ui.hang=", 8)) {
+        int secs = atoi(line + 8);
+        if (secs <= 0 || secs > 120) {
+            printf("@ui.hang.error seconds must be 1..120\n");
+            fflush(stdout);
+            return true;
+        }
+        printf("@ui.hang %d\n", secs);
+        fflush(stdout);
+        muse_ui_bench_hang(secs);
+        return true;
+    }
     /* The pet buttons, without a finger: 0 food, 1 music, 2 gift, 3 a pet. */
     if (!strncmp(line, "pet=", 4) && line[4] >= '0' && line[4] <= '3' && !line[5]) {
         static const muse_reaction_t R[] = { MUSE_REACT_CARROT, MUSE_REACT_NOTE,

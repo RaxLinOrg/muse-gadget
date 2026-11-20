@@ -43,7 +43,7 @@ if(CONFIG_MUSE_ENABLED)
         # The LVGL UI's fonts, as the TTFs LVGL builds them from (eink/fonts/).
         list(APPEND embed "eink/fonts/montserrat.ttf" "eink/fonts/symbols.ttf" "eink/fonts/unscii.ttf")
     else()
-        list(APPEND srcs "muse_ui.c" "muse_menu.c" "muse_settings_ui.c" "muse_keypad.c" "muse_lv_mem.c")
+        list(APPEND srcs "muse_ui.c" "muse_ui_watchdog.c" "muse_menu.c" "muse_settings_ui.c" "muse_keypad.c" "muse_lv_mem.c")
         # The pet buttons' three clips (muse_pet_sound.c). ~30 KB in all.
         list(APPEND srcs "muse_pet_sound.c")
         list(APPEND embed "pet_food.mp3" "pet_dance.mp3" "pet_thanks.mp3")

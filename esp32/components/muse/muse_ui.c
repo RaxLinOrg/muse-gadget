@@ -46,6 +46,7 @@
 #include "muse_settings.h"
 #include "muse_settings_ui.h"
 #include "muse_state.h"
+#include "muse_ui_watchdog.h"
 #include "muse_text.h"
 #include "muse_wifi.h"
 #include "muse_voice.h"
@@ -2066,6 +2067,13 @@ void muse_ui_bench_sub(int index)
 {
     s_bench_sub = index;
 }
+
+static volatile int s_bench_hang;
+
+void muse_ui_bench_hang(int secs)
+{
+    s_bench_hang = secs;   /* taken up by the frame timer, on the UI task */
+}
 #endif
 
 /* Streams the screen over the USB cable as base64 RGB565 (bench testing; needs
@@ -2113,6 +2121,21 @@ void muse_ui_request_snapshot(void)
 
 static void frame_tick(lv_timer_t *timer)
 {
+    /* Before anything else in the frame: this is the pulse the UI watchdog
+ * reads, and it should mean "the timer ran", not "the frame finished". */
+    muse_ui_watchdog_beat();
+
+#if LV_USE_SNAPSHOT
+    if (s_bench_hang > 0) {
+        int secs = s_bench_hang;
+        s_bench_hang = 0;
+        /* A delay, not a spin: a UI task waiting on a mutex it will never get
+         * is blocked, not busy, and the two look different to everything that
+         * might notice -- the idle task keeps running, which is exactly why
+         * the ordinary task watchdog would not see this. */
+        vTaskDelay(pdMS_TO_TICKS(secs * 1000));
+    }
+#endif
 #if LV_USE_SNAPSHOT
     if (s_bench_page >= 0) {
         int want = s_bench_page < s_tile_n ? s_bench_page : s_tile_n - 1;
@@ -2256,6 +2279,7 @@ esp_err_t muse_ui_start(void)
     }
     build_overlays();
     lv_timer_create(frame_tick, muse_board->frame_ms, NULL);
+    muse_ui_watchdog_start();
     s_ready = true;
     muse_board->display_unlock();
 

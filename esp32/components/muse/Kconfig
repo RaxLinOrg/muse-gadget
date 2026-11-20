@@ -263,6 +263,33 @@ menu "Muse"
             rarer characters and Korean show as boxes. Takes about 910 KB of
             flash, against about 1.2 MB.
 
+    config MUSE_UI_WATCHDOG
+        bool "Panic when the UI task stops drawing"
+        default n
+        help
+            Watches the LVGL frame timer and panics if it stops for
+            MUSE_UI_WATCHDOG_S seconds, so a deadlocked screen reboots and
+            leaves a core dump naming every task's backtrace instead of
+            sitting there lit and silent.
+
+            This is not what the task watchdog does. That one watches the idle
+            tasks, which keep running happily while the UI task is blocked on a
+            mutex -- the failure this is for. Both ESP watchdogs are off on
+            these boards anyway; sdkconfig.defaults says why.
+
+            It needs a coredump partition to be worth much: partitions_muse.csv
+            and partitions_muse_8mb.csv both have one.
+
+    config MUSE_UI_WATCHDOG_S
+        int "Seconds without a frame before the panic"
+        depends on MUSE_UI_WATCHDOG
+        default 10
+        help
+            Long enough that no ordinary frame ever misses it -- frames are
+            tens of milliseconds -- and short enough to fire while the board is
+            still in front of whoever noticed. The watchdog holds off entirely
+            while the screen is asleep or the camera view has LVGL paused.
+
     config MUSE_CJK_FONT_NOTO_TC
         bool "Draw CJK captions with Noto Sans TC instead of Unifont"
         depends on MUSE_CJK_FONT

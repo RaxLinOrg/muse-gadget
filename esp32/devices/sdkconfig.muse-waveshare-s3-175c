@@ -73,3 +73,10 @@ CONFIG_PM_PROFILING=y
 CONFIG_MUSE_CJK_FONT=y
 CONFIG_MUSE_CJK_FONT_NOTO_TC=y
 CONFIG_MUSE_PAGE_CJK_24=y
+
+# A frozen screen on this board on 2026-11-19 left nothing behind: both ESP
+# watchdogs are off (sdkconfig.defaults says why) and the task watchdog would
+# not have caught it anyway, since it watches the idle tasks and a UI task
+# blocked on a mutex lets idle run. This watches the LVGL frame timer instead.
+CONFIG_MUSE_UI_WATCHDOG=y
+CONFIG_MUSE_UI_WATCHDOG_S=10
