@@ -209,6 +209,26 @@ it ran off both edges:
 
 ![The 250 px card](assets/radar-dev-card-250wide.png)
 
+### Big enough to hit, and to read
+
+| The card | 250 NM at cap 300 |
+|---|---|
+| ![](assets/radar-dev-card4.png) | ![](assets/radar-dev-planes-250-cap300.png) |
+
+- **Both icons grew.** The info icon went 36 → 52 px and the mode glyph scales
+  with it, because a 22 px drawing inside a 44 px hit box reads as decoration
+  rather than as something to press, and missing it is the normal outcome.
+- **The card grew with them**, 360 × 92 → 400 × 124, and took a fourth line.
+  It is only up for five seconds, so it may as well say everything worth
+  saying while it is there: where the scope is pointed, what is nearest, how
+  far and how many, and what the source is doing — age of the sweep, whether
+  the last fetch failed, and the cap in force.
+- **It also moved below centre.** At four lines it was tall enough to swallow
+  the mode glyph it shares the top right with, and a control you cannot see is
+  worse than a card in an awkward place.
+- **A second tap on the info icon puts the card away.** The five-second timer
+  is still there for the tap that is never followed by another one.
+
 ### Rings, not the nearest eighty
 
 The 80-target cap kept the nearest 80, which looked right at 12 NM and wrong at
@@ -218,6 +238,31 @@ divided into four range rings now, each holding a share of the cap and lending
 what it does not use to the others; within a ring the near ones still win. Los
 Angeles at 250 NM keeps 80 of 421 and spreads them to the edge — *(how: the
 screenshot above, and the page's own log line)*.
+
+**The cap itself follows the range: 80 at 12 and 40 NM, 300 at 250.** Spreading
+80 contacts over four hundred times the area still looked thin, and 250 NM is
+the range where the whole point is how much is out there. The Bay Area at
+250 NM keeps 196 of 250 — *(how: `Bay Area: 196 of 250 aircraft kept, cap 300`)*.
+
+### What 300 contacts cost, and where they live
+
+300 contacts is 10.8 KB, and the old design could not hold it anywhere. The
+sweep struct carried its contacts inline, which put one copy in internal
+`.bss`, two more on task stacks, and a 10.8 KB `memcpy` inside a spinlock on
+every publish. All three are unacceptable on this board, the first most of all.
+
+So the contacts moved out of the struct. A sweep now carries a pointer to an
+array in PSRAM, and there are exactly three arrays: the worker's scratch, the
+published one, and the page's. Publishing swaps two pointers under the lock
+and copies no contacts at all; reading swaps again, so the page walks away
+with the published array and leaves its previous one behind to be refilled. A
+`seq` counter is what tells a reader "nothing new" from "nothing", which is
+what stops a page that polls several times a second from blanking the scope
+between sweeps.
+
+Internal RAM is untouched by the change — free internal sat at 8,647 bytes
+with the cap at 300 — because every contact is in PSRAM and nothing is copied
+through a stack — *(how: `>page=radar:mem` with 196 contacts loaded)*.
 
 ## The AIS key, and where it lives
 

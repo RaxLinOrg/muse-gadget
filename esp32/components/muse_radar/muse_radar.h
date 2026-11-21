@@ -79,21 +79,39 @@ typedef struct {
 } muse_radar_target_t;
 
 /*
- * The cap exists because New York inside 250 nm is 1,199 aircraft in a 615 KB
- * body. Which 80 survive is decided ring by ring rather than by distance
- * alone -- see muse_radar_keep() -- because keeping the nearest 80 left the
- * outer two thirds of a 250 NM scope empty on any busy place.
+ * A cap exists because New York inside 250 nm is 1,199 aircraft in a 615 KB
+ * body. How many survive depends on the range: 80 is a comfortable scope at
+ * 12 and 40 NM and a thin one at 250, where the same picture covers four
+ * hundred times the area. Which ones survive is decided ring by ring rather
+ * than by distance alone -- see muse_radar_keep().
+ *
+ * MAX is the buffer size, which is the widest range's cap; muse_radar_cap()
+ * is what the current range actually keeps.
  */
-#define MUSE_RADAR_MAX_TARGETS 80
+#define MUSE_RADAR_MAX_TARGETS 300
 
+int muse_radar_cap(void);
+
+/*
+ * The contacts live in PSRAM and the struct carries a pointer to them, not
+ * the array itself. At 300 targets the array is 10.8 KB, which is too much
+ * for a task stack, far too much for internal .bss, and much too long to
+ * memcpy inside a spinlock -- so sweeps are published by swapping the
+ * pointer, never by copying the contacts.
+ */
 typedef struct {
-    muse_radar_target_t t[MUSE_RADAR_MAX_TARGETS];
+    muse_radar_target_t *t;     /* MUSE_RADAR_MAX_TARGETS entries, in PSRAM */
     int n;              /* how many are in t[] */
     int total;          /* how many the source actually had */
     bool valid;
     bool stale;         /* last fetch failed; what is here is the old sweep */
     uint32_t at;        /* seconds since boot when it landed */
+    uint32_t seq;       /* bumped on every publish; readers compare it */
 } muse_radar_sweep_t;
+
+/* Hands back a sweep with its own PSRAM contact array, or false. One per
+ * reader; muse_radar_get() swaps into it rather than copying. */
+bool muse_radar_sweep_init(muse_radar_sweep_t *s);
 
 void muse_radar_net_start(void);
 void muse_radar_get(muse_radar_sweep_t *out);

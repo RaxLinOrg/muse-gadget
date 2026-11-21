@@ -323,7 +323,14 @@ bool muse_radar_ais_snapshot(muse_radar_sweep_t *out)
     const muse_radar_place_t *p = muse_radar_place_at();
     float coslat = cosf(p->lat * (float)M_PI / 180.0f);
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000000);
+    /* The caller owns the contact array; clearing the struct must not lose
+     * the pointer to it. */
+    muse_radar_target_t *keep = out->t;
     memset(out, 0, sizeof(*out));
+    out->t = keep;
+    if (!out->t) {
+        return false;
+    }
 
     portENTER_CRITICAL(&s_lock);
     int n = s_ships;

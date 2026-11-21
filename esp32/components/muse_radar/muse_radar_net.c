@@ -186,16 +186,77 @@ int muse_radar_period_s(void)
 
 /* ---------------------------------------------------------- the sweep */
 
+/*
+ * How many contacts the current range keeps. 80 fills a 12 or 40 NM scope;
+ * 250 NM covers four hundred times the area of 12 and looked bare at the same
+ * number, so it gets the whole buffer.
+ */
+int muse_radar_cap(void)
+{
+    return muse_radar_range_index() == MUSE_RADAR_RANGE_COUNT - 1
+           ? MUSE_RADAR_MAX_TARGETS : 80;
+}
+
+bool muse_radar_sweep_init(muse_radar_sweep_t *s)
+{
+    memset(s, 0, sizeof(*s));
+    s->t = heap_caps_malloc(sizeof(muse_radar_target_t) * MUSE_RADAR_MAX_TARGETS,
+                            MALLOC_CAP_SPIRAM);
+    return s->t != NULL;
+}
+
+/* The published sweep and the worker's scratch. Publishing swaps the two
+ * pointers under the lock, so the spinlock is held for a handful of stores
+ * rather than a 10.8 KB copy. */
 static muse_radar_sweep_t s_sweep;
+static muse_radar_sweep_t s_work;
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool s_want = true;
 static volatile bool s_visible;
 static TaskHandle_t s_task;
 
+/*
+ * The caller hands in its own sweep and gets the published one back, leaving
+ * its previous contacts behind for the next publish to fill. Three buffers
+ * exist in all -- the worker's, the published one, and the page's -- and no
+ * contact is ever copied.
+ */
 void muse_radar_get(muse_radar_sweep_t *out)
 {
+    if (!out->t || !s_sweep.t) {
+        return;
+    }
     portENTER_CRITICAL(&s_lock);
-    *out = s_sweep;
+    if (s_sweep.seq != out->seq) {
+        /* Something new: take it, and leave our old contacts behind for the
+         * next publish to fill. Nothing new: the caller keeps what it has,
+         * which is what stops a reader that polls faster than the worker
+         * fetches from blanking the scope between sweeps. */
+        muse_radar_target_t *mine = out->t;
+        *out = s_sweep;
+        s_sweep.t = mine;
+    }
+    portEXIT_CRITICAL(&s_lock);
+}
+
+/* Empty a sweep without losing the contact array it owns. */
+static void sweep_clear(muse_radar_sweep_t *s)
+{
+    muse_radar_target_t *keep = s->t;
+    memset(s, 0, sizeof(*s));
+    s->t = keep;
+}
+
+/* Hand the worker's scratch to the readers and take back whatever buffer the
+ * published sweep was holding. The lock covers a few stores, never contacts. */
+static void publish(void)
+{
+    portENTER_CRITICAL(&s_lock);
+    muse_radar_target_t *theirs = s_sweep.t;
+    uint32_t seq = s_sweep.seq + 1;
+    s_sweep = s_work;
+    s_sweep.seq = seq;
+    s_work.t = theirs;
     portEXIT_CRITICAL(&s_lock);
 }
 
@@ -213,7 +274,9 @@ void muse_radar_refresh(void)
 static void radar_reset(void)
 {
     portENTER_CRITICAL(&s_lock);
-    memset(&s_sweep, 0, sizeof(s_sweep));
+    uint32_t seq = s_sweep.seq + 1;
+    sweep_clear(&s_sweep);
+    s_sweep.seq = seq;
     portEXIT_CRITICAL(&s_lock);
     /* The rain picture was projected for one place at one zoom, and a setting
      * change invalidates both. Dropping it is what stops the last city's
@@ -245,7 +308,6 @@ void muse_radar_set_visible(bool visible)
  * costs one badly distributed sweep and nothing else.
  */
 #define KEEP_RINGS   4
-#define RING_QUOTA   (MUSE_RADAR_MAX_TARGETS / KEEP_RINGS)
 
 static int ring_of(float dst)
 {
@@ -259,7 +321,12 @@ static int ring_of(float dst)
 
 void muse_radar_keep(muse_radar_sweep_t *s, const muse_radar_target_t *t)
 {
-    if (s->n < MUSE_RADAR_MAX_TARGETS) {
+    const int cap = muse_radar_cap();
+    const int quota = cap / KEEP_RINGS;
+    if (!s->t) {
+        return;
+    }
+    if (s->n < cap) {
         int at = s->n;
         while (at > 0 && s->t[at - 1].dst > t->dst) {
             s->t[at] = s->t[at - 1];
@@ -282,7 +349,7 @@ void muse_radar_keep(muse_radar_sweep_t *s, const muse_radar_target_t *t)
             fat = r;
         }
     }
-    if (count[mine] >= RING_QUOTA && count[mine] >= count[fat]) {
+    if (count[mine] >= quota && count[mine] >= count[fat]) {
         return;         /* this ring has had its share; leave the list alone */
     }
 
@@ -513,19 +580,20 @@ static void radar_task(void *arg)
             s_want = false;
             muse_radar_mode_t mode = muse_radar_mode();
             if (mode == MUSE_RADAR_PLANES) {
-                muse_radar_sweep_t s = { 0 };
-                if (fetch_planes(&s)) {
-                    s.valid = true;
-                    s.at = up;
-                    portENTER_CRITICAL(&s_lock);
-                    s_sweep = s;
-                    portEXIT_CRITICAL(&s_lock);
+                sweep_clear(&s_work);
+                if (fetch_planes(&s_work)) {
+                    s_work.valid = true;
+                    s_work.at = up;
+                    int n = s_work.n, total = s_work.total;
+                    publish();
                     next = up + (uint32_t)muse_radar_period_s();
-                    ESP_LOGI(TAG, "%s: %d of %d aircraft kept",
-                             muse_radar_place_at()->name, s.n, s.total);
+                    ESP_LOGI(TAG, "%s: %d of %d aircraft kept, cap %d",
+                             muse_radar_place_at()->name, n, total,
+                             muse_radar_cap());
                 } else {
                     portENTER_CRITICAL(&s_lock);
                     s_sweep.stale = true;
+                    s_sweep.seq++;      /* the page has to see this */
                     portEXIT_CRITICAL(&s_lock);
                     next = up + RETRY_EVERY_S;
                 }
@@ -536,11 +604,10 @@ static void radar_task(void *arg)
                 /* AIS pushes rather than answers, so there is nothing to
                  * time: keep the socket up and read off what has arrived. */
                 muse_radar_ais_poll();
-                muse_radar_sweep_t s;
-                if (muse_radar_ais_snapshot(&s)) {
-                    portENTER_CRITICAL(&s_lock);
-                    s_sweep = s;
-                    portEXIT_CRITICAL(&s_lock);
+                sweep_clear(&s_work);
+                if (muse_radar_ais_snapshot(&s_work)) {
+                    s_work.at = up;
+                    publish();
                 }
                 next = up + 2;
             }
@@ -563,6 +630,12 @@ void muse_radar_net_start(void)
     muse_radar_range_index();
     muse_radar_mode();
     muse_radar_place();
+    /* The published sweep and the worker's scratch. Without both there is
+     * nowhere to put contacts, so the page stays empty rather than crashing. */
+    if (!muse_radar_sweep_init(&s_sweep) || !muse_radar_sweep_init(&s_work)) {
+        ESP_LOGE(TAG, "no PSRAM for %d contacts", MUSE_RADAR_MAX_TARGETS);
+        return;
+    }
     /* cJSON and mbedTLS both want room; PSRAM keeps it off the internal heap. */
     if (xTaskCreateWithCaps(radar_task, "radar", TASK_STACK, NULL, 3, &s_task,
                             MALLOC_CAP_SPIRAM) != pdPASS) {

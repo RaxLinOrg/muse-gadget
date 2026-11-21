@@ -23,6 +23,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "muse_page.h"
 #include "muse_settings_ui.h"
@@ -59,26 +60,29 @@ static const char *TAG = "radar";
 static uint16_t *s_px;
 static lv_image_dsc_t s_dsc;
 static lv_obj_t *s_img, *s_info, *s_mode_hit;
-static lv_obj_t *s_pop, *s_pop_nm, *s_pop_city, *s_pop_b, *s_pop_c;
+static lv_obj_t *s_pop, *s_pop_nm, *s_pop_city, *s_pop_b, *s_pop_c, *s_pop_d;
 static lv_obj_t *s_tag[3];
 static uint32_t s_drawn_at = UINT32_MAX;
 static int s_drawn_n = -1;
+static muse_radar_sweep_t s_view;   /* the page's buffer; get() swaps into it */
 static uint32_t s_pop_until;    /* lv_tick at which the card goes away again */
-static volatile bool s_pop_show;/* bench() asked for it; tick() raises it */
+static volatile bool s_pop_tap; /* bench() asked for a tap; tick() makes it */
 
 /* The icon sits where the speaker does on the face page: a chord's width in
  * from the ring, high on the right, where a thumb reaches without covering
  * the scope. INFO_PX matches that button's 36 px box. */
-#define INFO_PX   36
+#define INFO_PX   52
 #define INFO_Y    (-RAD * 5 / 8)
 #define INFO_D    (RAD - INFO_PX / 2 - 4)
 #define INFO_X    ((int)(0.5f + sqrtf((float)(INFO_D * INFO_D - INFO_Y * INFO_Y))))
 #define POP_MS    5000
 
 /* The mode glyph is rasterised into the scope image, so it cannot take a tap
- * on its own. This invisible box sits over it and does. */
-#define MODE_Y    (INFO_Y + INFO_PX + 6)
-#define MODE_HIT  44
+ * on its own. This invisible box sits over it and does. Both targets are a
+ * finger wide rather than a cursor wide: 36 px was hard to hit. */
+#define MODE_Y    (INFO_Y + INFO_PX + 10)
+#define MODE_HIT  56
+#define MODE_SCALE 1.6f
 
 static inline uint16_t rgb(int r, int g, int b)
 {
@@ -238,33 +242,43 @@ static void draw_blip(float x, float y, float heading, float size, uint16_t c)
  * scope just under the info icon. LVGL's symbol font has no aircraft, ship
  * or cloud, and the rasteriser that draws the blips already draws these.
  */
+/* The glyph under the info icon, scaled up with it: at the old size it was a
+ * 22 px drawing inside a 44 px hit box, which read as decoration rather than
+ * as something to press. k scales every offset from the centre. */
 static void draw_mode_icon(void)
 {
-    int cx = CTR + INFO_X, cy = CTR + INFO_Y + INFO_PX + 6;
+    const float k = MODE_SCALE;
+    int cx = CTR + INFO_X, cy = CTR + MODE_Y;
+    float x = (float)cx, y = (float)cy;
+#define KX(v)  (x + (v) * k)
+#define KY(v)  (y + (v) * k)
+#define KI(v)  ((int)(0.5f + (v) * k))
     switch (muse_radar_mode()) {
-    case MUSE_RADAR_SHIPS: {
+    case MUSE_RADAR_SHIPS:
         /* A hull from the side, bow to the right, with a mast. */
-        float x = (float)cx, y = (float)cy;
-        tri(x - 11, y + 1, x + 13, y + 1, x + 7, y + 7, C_SHIP);
-        tri(x - 11, y + 1, x - 7, y + 7, x + 7, y + 7, C_SHIP);
-        line(cx - 1, cy - 9, cx - 1, cy, C_SHIP);
-        line(cx - 1, cy - 9, cx + 5, cy - 3, C_SHIP);
+        tri(KX(-11), KY(1), KX(13), KY(1), KX(7), KY(7), C_SHIP);
+        tri(KX(-11), KY(1), KX(-7), KY(7), KX(7), KY(7), C_SHIP);
+        line(cx - KI(1), cy - KI(9), cx - KI(1), cy, C_SHIP);
+        line(cx - KI(1), cy - KI(9), cx + KI(5), cy - KI(3), C_SHIP);
         break;
-    }
     case MUSE_RADAR_WEATHER:
         /* A cloud of three discs with rain falling out of it. */
-        disc(cx - 6, cy - 2, 5, C_MID);
-        disc(cx + 1, cy - 5, 7, C_MID);
-        disc(cx + 8, cy - 2, 5, C_MID);
+        disc(cx - KI(6), cy - KI(2), KI(5), C_MID);
+        disc(cx + KI(1), cy - KI(5), KI(7), C_MID);
+        disc(cx + KI(8), cy - KI(2), KI(5), C_MID);
         for (int i = -1; i <= 1; i++) {
-            line(cx + i * 6 - 1, cy + 5, cx + i * 6 - 3, cy + 10, C_LOW);
+            line(cx + KI(i * 6 - 1), cy + KI(5),
+                 cx + KI(i * 6 - 3), cy + KI(10), C_LOW);
         }
         break;
     case MUSE_RADAR_PLANES:
     default:
-        draw_blip((float)cx, (float)cy, 0.0f, 12.0f, C_MID);
+        draw_blip(x, y, 0.0f, 12.0f * k, C_MID);
         break;
     }
+#undef KX
+#undef KY
+#undef KI
 }
 
 static void draw_scope(const muse_radar_sweep_t *s)
@@ -354,6 +368,13 @@ static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *font, uint32_t colour,
 static void on_info_clicked(lv_event_t *e)
 {
     (void)e;
+    if (!lv_obj_has_flag(s_pop, LV_OBJ_FLAG_HIDDEN)) {
+        /* Second tap puts it away. The five-second timer is still there for
+         * the tap that is never followed by another one. */
+        lv_obj_add_flag(s_pop, LV_OBJ_FLAG_HIDDEN);
+        s_drawn_at = UINT32_MAX;        /* puts the tags back next tick */
+        return;
+    }
     s_pop_until = lv_tick_get() + POP_MS;
     lv_obj_move_foreground(s_pop);
     lv_obj_clear_flag(s_pop, LV_OBJ_FLAG_HIDDEN);
@@ -445,12 +466,16 @@ static void build(lv_obj_t *tile)
 
     s_pop = lv_obj_create(tile);
     lv_obj_remove_style_all(s_pop);
-    /* 250 px held one centred line. The first line is now two taps that must
-      * not touch, and the caption font runs about 17 px a character, so the
-      * widest pair ("250 NM" and "Taiwan Strait") needs 332 px between the
-      * margins. */
-    lv_obj_set_size(s_pop, 360, 92);
-    lv_obj_align(s_pop, LV_ALIGN_CENTER, 0, -44);
+    /* It is only up for five seconds, so it may as well say everything worth
+     * saying while it is. Four lines on a 400 px card: where the scope is
+     * pointed, what is nearest, how far and how many, and what the source is
+     * doing. The caption font runs about 17 px a character, so 372 px between
+     * the margins holds the widest first line comfortably. */
+    lv_obj_set_size(s_pop, 400, 124);
+    /* Below centre, not above it: at four lines the card is tall enough to
+      * swallow the mode glyph, and a control you cannot see is worse than a
+      * card in an awkward place. */
+    lv_obj_align(s_pop, LV_ALIGN_CENTER, 0, 46);
     lv_obj_set_style_bg_color(s_pop, lv_color_hex(0x06180f), 0);
     lv_obj_set_style_bg_opa(s_pop, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(s_pop, 14, 0);
@@ -470,12 +495,16 @@ static void build(lv_obj_t *tile)
     lv_obj_set_ext_click_area(s_pop_city, 10);
     lv_obj_add_event_cb(s_pop_city, on_pop_city_clicked, LV_EVENT_CLICKED, NULL);
 
-    s_pop_b = label(s_pop, cap, 0xeaffe9, LV_ALIGN_TOP_MID, 0, 30);
-    s_pop_c = label(s_pop, cap, TEXT_DIM, LV_ALIGN_TOP_MID, 0, 54);
+    s_pop_b = label(s_pop, cap, 0xeaffe9, LV_ALIGN_TOP_MID, 0, 34);
+    s_pop_c = label(s_pop, cap, TEXT_MID, LV_ALIGN_TOP_MID, 0, 62);
+    s_pop_d = label(s_pop, cap, TEXT_DIM, LV_ALIGN_TOP_MID, 0, 90);
 
     for (int i = 0; i < 3; i++) {
         s_tag[i] = label(tile, cap, TEXT_DIM, LV_ALIGN_TOP_LEFT, 0, 0);
         lv_obj_add_flag(s_tag[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    if (!muse_radar_sweep_init(&s_view)) {
+        ESP_LOGE(TAG, "no PSRAM for the page's contacts");
     }
     muse_radar_net_start();
 }
@@ -535,6 +564,7 @@ static void fill_popup(const muse_radar_sweep_t *s)
     if (!muse_wifi_connected()) {
         lv_label_set_text(s_pop_b, "NO WI-FI");
         lv_label_set_text(s_pop_c, "");
+        lv_label_set_text(s_pop_d, "");
         return;
     }
     if (muse_radar_mode() == MUSE_RADAR_WEATHER) {
@@ -544,6 +574,7 @@ static void fill_popup(const muse_radar_sweep_t *s)
         if (!muse_radar_rain_fresh()) {
             lv_label_set_text(s_pop_b, "NO PICTURE YET");
             lv_label_set_text(s_pop_c, "RainViewer");
+            lv_label_set_text(s_pop_d, "");
             return;
         }
         if (pm == 0) {
@@ -556,23 +587,27 @@ static void fill_popup(const muse_radar_sweep_t *s)
         }
         snprintf(buf, sizeof(buf), "RainViewer  z=%d", muse_radar_rain_zoom());
         lv_label_set_text(s_pop_c, buf);
+        lv_label_set_text(s_pop_d, "PRECIPITATION ONLY");
         return;
     }
     if (muse_radar_mode() == MUSE_RADAR_SHIPS) {
         if (!muse_radar_ais_have_key()) {
             lv_label_set_text(s_pop_b, "NO AIS KEY");
             lv_label_set_text(s_pop_c, "aisstream.io key");
+            lv_label_set_text(s_pop_d, "");
             return;
         }
         if (!muse_radar_ais_linked()) {
             lv_label_set_text(s_pop_b, "NO AIS LINK");
             lv_label_set_text(s_pop_c, "no internal RAM");
+            lv_label_set_text(s_pop_d, "");
             return;
         }
     }
     if (s->n == 0) {
         lv_label_set_text(s_pop_b, s->valid ? "NOTHING IN RANGE" : "LOOKING...");
         lv_label_set_text(s_pop_c, "");
+        lv_label_set_text(s_pop_d, s->stale ? "LAST FETCH FAILED" : "");
         return;
     }
     /* The nearest contact, then how many there are. With the plane tags gone
@@ -596,6 +631,19 @@ static void fill_popup(const muse_radar_sweep_t *s)
         snprintf(buf, sizeof(buf), "%.1f NM  %d", (double)t->dst, s->n);
     }
     lv_label_set_text(s_pop_c, buf);
+    /* The fourth line is about the sweep rather than any one contact: how old
+     * it is, whether the last fetch failed, and what the cap is set to, since
+     * that is the thing that decides how full the scope looks. */
+    uint32_t age = (uint32_t)(esp_timer_get_time() / 1000000) - s->at;
+    if (s->stale) {
+        snprintf(buf, sizeof(buf), "STALE  %lus OLD", (unsigned long)age);
+    } else if (muse_radar_mode() == MUSE_RADAR_SHIPS) {
+        snprintf(buf, sizeof(buf), "AIS LIVE  CAP %d", muse_radar_cap());
+    } else {
+        snprintf(buf, sizeof(buf), "%lus AGO  CAP %d", (unsigned long)age,
+                 muse_radar_cap());
+    }
+    lv_label_set_text(s_pop_d, buf);
 }
 
 static void tick(bool visible)
@@ -604,8 +652,8 @@ static void tick(bool visible)
     if (!visible || !s_px) {
         return;
     }
-    muse_radar_sweep_t s;
-    muse_radar_get(&s);
+    muse_radar_get(&s_view);
+    const muse_radar_sweep_t s = s_view;
     /* Only ships are labelled on the scope. Eighty aircraft three tags at a
      * time was noise over the thing the tags were meant to annotate, and the
      * card says what the nearest one is anyway; ship names are worth the
@@ -624,10 +672,11 @@ static void tick(bool visible)
         s_drawn_at = s.at;
         s_drawn_n = s.n;
     }
-    if (s_pop_show) {
-        s_pop_show = false;
-        lv_obj_move_foreground(s_pop);      /* over the contact tags */
-        lv_obj_clear_flag(s_pop, LV_OBJ_FLAG_HIDDEN);
+    if (s_pop_tap) {
+        /* The console cannot tap, so it asks here and the tap happens on the
+         * LVGL task, through the same handler a finger would reach. */
+        s_pop_tap = false;
+        on_info_clicked(NULL);
     }
     if (!lv_obj_has_flag(s_pop, LV_OBJ_FLAG_HIDDEN)) {
         if ((int32_t)(lv_tick_get() - s_pop_until) >= 0) {
@@ -772,9 +821,8 @@ static bool bench(const char *arg)
         return true;
     }
     if (!strcmp(arg, "info")) {
-        /* Raises the card the icon raises. The console cannot tap. */
-        s_pop_until = lv_tick_get() + POP_MS;
-        s_pop_show = true;
+        /* The tap the icon takes: raises the card, or puts it away again. */
+        s_pop_tap = true;
         return true;
     }
     if (!strcmp(arg, "planes")) {
