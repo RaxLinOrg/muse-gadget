@@ -1,6 +1,7 @@
 # Radar
 
-**Status:** planes and weather run on the board; ships are blocked on internal RAM
+**Status:** planes and weather run on the board; ships unblocked by a forked
+websocket client, not yet confirmed on hardware
 **Branch:** `feat/radar`
 **Last updated:** 2026-11-20
 
@@ -96,11 +97,45 @@ What would actually unblock it, in rough order of effort:
    `xTaskCreate` to `xTaskCreateStatic` with a PSRAM stack buffer, which
    `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y` already permits. Self-
    contained, but it forks a component. **This is the only route left that
-   does not depend on the rest of the firmware getting smaller.**
+   does not depend on the rest of the firmware getting smaller.** Done — see
+   below.
 3. Drop ships.
 
-Until one of those happens the page says `NO AIS LINK / no internal RAM`
-rather than looking for contacts that cannot arrive.
+Until the fork is confirmed on the board the page says
+`NO AIS LINK / no internal RAM` rather than looking for contacts that cannot
+arrive.
+
+### The fork that unblocks it
+
+`components/esp_websocket_client/` is a copy of upstream 1.2.3 (esp-protocols
+`1750a3fd`), and being a local component it overrides the managed dependency
+that `main/` and `components/muse_radar/` both declare. Its own `README.md`
+carries the detail; every edit in `esp_websocket_client.c` is marked
+`muse fork`, so a diff against the component-manager cache shows exactly what
+changed and nothing else.
+
+One 8 KB PSRAM stack and one internal `StaticTask_t` live in file scope and
+are lent to a single client at a time through `xTaskCreateStatic`. A second
+concurrent client falls back to upstream's `xTaskCreate`, so the fork cannot
+make anything worse than it was.
+
+The part that needed care is not the allocation but the teardown. The idle task
+does **not** free a static task's buffers, so a static task that deletes itself
+leaks its stack — and reusing the buffers while the dead TCB is still on the
+termination list would corrupt that list. So the static task does not delete
+itself: it sets `STOPPED_BIT` and parks on `vTaskSuspend()`, and `ws_slot_reap()`
+deletes it from whichever task asked it to stop. That is always another task,
+because upstream's `stop()` and `close()` already refuse to run on the
+websocket task, and deleting *another* task frees its TCB synchronously — so
+the slot is free the moment `ws_slot_reap()` returns. `ws_slot_reap()` is
+called from `stop()`, from both exits of `close()`, and from `destroy()`, and
+is idempotent. The one path where the task really does delete itself,
+`esp_websocket_client_destroy_on_exit()`, retires the slot instead of reusing
+it; radar never takes that path.
+
+Costs worth knowing: carrying the fork across IDF updates (re-copy upstream,
+re-apply the `muse fork` blocks), and 8 KB of PSRAM held for the lifetime of
+the firmware once Ships has run.
 
 Driving it from the bench: `>page=radar:planes` / `:ships` / `:weather`,
 `>page=radar:12` / `:40` / `:250` / `:off`, `>page=radar:place=3`,
@@ -408,11 +443,13 @@ absent in Ships.
 ## Blockers
 
 - Planes and weather: none, both run on the board.
-- Ships: **internal RAM**, not the key. A key is in place and the stream
-  still will not open; see "Ships are blocked on internal RAM" above for the
-  measurements and the three ways out.
-- The app binary is now **3.75 MB in a 4 MB `ota_0` slot**, ~250 KB of
-  headroom. Worth watching before the next sizeable feature.
+- Ships: the internal-RAM block is addressed by the forked
+  `esp_websocket_client` (see "The fork that unblocks it"), but the fix has
+  **not yet been seen working on hardware** — the build is done and the flash
+  is outstanding.
+- The app binary is now **3.82 MB in a 4 MB `ota_0` slot**, ~190 KB of
+  headroom. Tighter than it was and worth watching before the next sizeable
+  feature.
 
 ## Open questions
 
