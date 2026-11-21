@@ -33,15 +33,8 @@ typedef enum {
     MUSE_RADAR_PLANES = 0,
     MUSE_RADAR_SHIPS,
     MUSE_RADAR_WEATHER,
-    MUSE_RADAR_CLOUDS,
     MUSE_RADAR_MODE_COUNT,
 } muse_radar_mode_t;
-
-/* True for the two modes that are a picture rather than a list of contacts. */
-static inline bool muse_radar_mode_is_layer(muse_radar_mode_t m)
-{
-    return m == MUSE_RADAR_WEATHER || m == MUSE_RADAR_CLOUDS;
-}
 
 /*
  * Ranges, widest last, with "off" one past the end. Off is not a mode the
@@ -133,11 +126,11 @@ void muse_radar_set_visible(bool visible);
 void muse_radar_refresh(void);
 
 /*
- * Weather and clouds are a picture rather than a list of contacts: tiles
- * reprojected into the scope. The buffer is RGB565 at MUSE_RADAR_TILE_PX,
- * which is the whole round display: the scope is the page. One buffer serves
- * both, because only one of them is ever on screen. NULL until a picture has
- * landed; the caller must not free it.
+ * Weather is a picture rather than a list of contacts: tiles reprojected into
+ * the scope. The buffer is RGB565 at MUSE_RADAR_TILE_PX, which is the whole
+ * round display: the scope is the page. Cloud and rain share it -- cloud is
+ * laid down first and rain painted over it -- because they are one picture of
+ * one sky. NULL until a picture has landed; the caller must not free it.
  */
 #define MUSE_RADAR_TILE_PX 466
 const uint16_t *muse_radar_rain(void);

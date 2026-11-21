@@ -22,17 +22,20 @@
 
 /* Between the component's own files; not for anyone else. */
 
-/* Weather: fetch the newest RainViewer frame into the layer. */
+/*
+ * Weather: one picture of the sky, in two passes into the same buffer. Cloud
+ * (NASA GIBS clean infrared) is laid down first and rain (the newest
+ * RainViewer frame) painted over it, so a rainy cell always wins the pixel it
+ * shares with the cloud it falls out of.
+ */
 bool muse_radar_rain_fetch(void);
 
-/* Clouds: the newest clean-infrared frame from NASA GIBS, into the same
- * layer, since only one picture is ever on screen. */
-bool muse_radar_cloud_fetch(void);
-
-/* How much of the scope has rain on it, in tenths of a percent, and the zoom
- * the picture was cut at. A picture landing is not the same as it having
+/* How much of the scope each pass covered, in tenths of a percent, and the
+ * zoom the rain was cut at. A picture landing is not the same as it having
  * anything in it. */
 int  muse_radar_rain_permille(void);
+int  muse_radar_cloud_permille(void);
+bool muse_radar_cloud_seen(void);
 int  muse_radar_rain_zoom(void);
 
 /* Drop the picture: it belongs to the place and zoom it was cut for. */

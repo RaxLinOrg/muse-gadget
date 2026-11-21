@@ -60,11 +60,13 @@ static const char *TAG = "radar.rain";
 
 #define PX  MUSE_RADAR_TILE_PX
 
-static uint16_t *s_rain;        /* PX*PX RGB565, 0 where it is dry */
-static uint8_t  *s_grey;        /* clouds only: raw infrared, 0 = no data */
+static uint16_t *s_rain;        /* PX*PX RGB565, 0 where the sky is empty */
+static uint8_t  *s_grey;        /* clouds pass: raw infrared, 0 = no data */
 static bool s_fresh;
 static int s_wet;               /* scope pixels with rain in them */
-static int s_zoom;              /* the zoom the current picture was cut at */
+static int s_cloud;             /* scope pixels with cloud in them */
+static bool s_cloud_seen;       /* a satellite answered for this place at all */
+static int s_zoom;              /* the zoom the rain pass was cut at */
 
 const uint16_t *muse_radar_rain(void)
 {
@@ -82,14 +84,34 @@ bool muse_radar_rain_fresh(void)
  * the card used to answer the first while claiming to answer the second: dry
  * sky over the whole state still read "RAIN".
  */
-int muse_radar_rain_permille(void)
+static int permille(int px)
 {
     if (!s_fresh) {
         return 0;
     }
     /* Against the scope's area, not the square the pixels live in. */
     int area = (int)(3.14159f * (PX / 2) * (PX / 2));
-    return area > 0 ? (int)((long long)s_wet * 1000 / area) : 0;
+    return area > 0 ? (int)((long long)px * 1000 / area) : 0;
+}
+
+int muse_radar_rain_permille(void)
+{
+    return permille(s_wet);
+}
+
+int muse_radar_cloud_permille(void)
+{
+    return permille(s_cloud);
+}
+
+/*
+ * Whether any infrared reached the scope. Nothing painted can mean clear sky
+ * or it can mean no satellite sees this place -- the Indian Ocean has no GIBS
+ * disc at all -- and the card must not pick one on the reader's behalf.
+ */
+bool muse_radar_cloud_seen(void)
+{
+    return s_cloud_seen;
 }
 
 int muse_radar_rain_zoom(void)
@@ -103,6 +125,8 @@ void muse_radar_rain_invalidate(void)
 {
     s_fresh = false;
     s_wet = 0;
+    s_cloud = 0;
+    s_cloud_seen = false;
 }
 
 /* --------------------------------------------------------------- fetch */
@@ -398,7 +422,7 @@ static bool blit_tile(const uint8_t *png, size_t len, int tx, int ty, int z,
  * RainViewer discontinued its own satellite layer on 2026-01-01, which is why
  * clouds come from somewhere else entirely.
  */
-static bool fetch_layer(bool clouds)
+static bool fetch_layer(bool clouds, bool keep)
 {
     if (!s_rain) {
         s_rain = heap_caps_calloc((size_t)PX * PX, 2, MALLOC_CAP_SPIRAM);
@@ -433,9 +457,15 @@ static bool fetch_layer(bool clouds)
     if (!png) {
         return false;
     }
-    memset(s_rain, 0, (size_t)PX * PX * 2);
-    s_wet = 0;
-    s_zoom = z;
+    if (!keep) {
+        memset(s_rain, 0, (size_t)PX * PX * 2);
+    }
+    if (clouds) {
+        s_cloud = 0;
+    } else {
+        s_wet = 0;
+        s_zoom = z;
+    }
     if (clouds) {
         /* Freed before this call returns; 217 KB of PSRAM for the time it
          * takes to decide where the cloud starts. */
@@ -489,6 +519,7 @@ static bool fetch_layer(bool clouds)
                 seen++;
             }
         }
+        s_cloud_seen = seen > 0;
         int med = 0;
         for (int i = 0, run = 0; i < 256; i++) {
             run += hist[i];
@@ -511,26 +542,47 @@ static bool fetch_layer(bool clouds)
                 continue;
             }
             s_rain[i] = cloud_ramp((b - floor_v) / span);
-            s_wet++;
+            s_cloud++;
         }
         ESP_LOGI(TAG, "%s clouds: median %.2f, floor %.2f, %d of %d px",
-                 p->name, (double)(med / 255.0f), (double)floor_v, s_wet, seen);
+                 p->name, (double)(med / 255.0f), (double)floor_v, s_cloud, seen);
         heap_caps_free(s_grey);
         s_grey = NULL;
     }
-    s_fresh = ok > 0;
     ESP_LOGI(TAG, "%s %s: z=%d, %d of 4 tiles, %d px, stack left %u",
-             p->name, clouds ? "clouds" : "rain", z, ok, s_wet,
+             p->name, clouds ? "clouds" : "rain", z, ok,
+             clouds ? s_cloud : s_wet,
              (unsigned)uxTaskGetStackHighWaterMark(NULL));
-    return s_fresh;
+    return ok > 0;
 }
 
+/*
+ * Cloud first, then rain over the top of it, into the one buffer. They are
+ * two measurements of the same sky and separating them into two modes only
+ * made the user press the icon more: rain without its cloud reads as an empty
+ * scope most days, and cloud without its rain cannot say where the weather
+ * actually is.
+ *
+ * Either pass may come back with nothing and the other still be worth
+ * drawing -- the Indian Ocean has no infrared disc at all, and most of the
+ * time most places have no rain -- so the picture counts as current if either
+ * one landed, and the card reports the two coverages separately.
+ */
 bool muse_radar_rain_fetch(void)
 {
-    return fetch_layer(false);
-}
-
-bool muse_radar_cloud_fetch(void)
-{
-    return fetch_layer(true);
+    if (!s_rain) {
+        s_rain = heap_caps_calloc((size_t)PX * PX, 2, MALLOC_CAP_SPIRAM);
+        if (!s_rain) {
+            ESP_LOGE(TAG, "no room for the weather layer");
+            return false;
+        }
+    }
+    memset(s_rain, 0, (size_t)PX * PX * 2);
+    s_wet = 0;
+    s_cloud = 0;
+    s_cloud_seen = false;
+    bool clouds = fetch_layer(true, true);
+    bool rain = fetch_layer(false, true);
+    s_fresh = clouds || rain;
+    return s_fresh;
 }

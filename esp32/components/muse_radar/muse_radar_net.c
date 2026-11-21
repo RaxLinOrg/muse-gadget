@@ -145,7 +145,6 @@ const char *muse_radar_mode_name(muse_radar_mode_t m)
     switch (m) {
     case MUSE_RADAR_SHIPS:   return "Ships";
     case MUSE_RADAR_WEATHER: return "Weather";
-    case MUSE_RADAR_CLOUDS:  return "Clouds";
     default:                 return "Planes";
     }
 }
@@ -175,9 +174,10 @@ const muse_radar_place_t *muse_radar_place_at(void)
 
 int muse_radar_period_s(void)
 {
-    if (muse_radar_mode_is_layer(muse_radar_mode())) {
+    if (muse_radar_mode() == MUSE_RADAR_WEATHER) {
         /* RainViewer publishes a frame every 600 s exactly, and GIBS serves
-         * the geostationary discs on the same ten-minute cadence. */
+         * the geostationary discs on the same ten-minute cadence, so one
+         * period covers both passes. */
         return 600;
     }
     switch (muse_radar_range_index()) {
@@ -600,9 +600,8 @@ static void radar_task(void *arg)
                     portEXIT_CRITICAL(&s_lock);
                     next = up + RETRY_EVERY_S;
                 }
-            } else if (muse_radar_mode_is_layer(mode)) {
-                bool got = mode == MUSE_RADAR_CLOUDS ? muse_radar_cloud_fetch()
-                                                     : muse_radar_rain_fetch();
+            } else if (mode == MUSE_RADAR_WEATHER) {
+                bool got = muse_radar_rain_fetch();
                 next = up + (got ? (uint32_t)muse_radar_period_s()
                                  : RETRY_EVERY_S);
             } else {

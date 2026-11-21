@@ -15,8 +15,11 @@ in degrees and the nearest contact ringed and named along the bottom.
   5,000 ft, bright green to 20,000 ft, dim green above.
 - **Ships** — AIS from [aisstream.io](https://aisstream.io), which wants a
   free key. Contacts carry a ten-minute vector.
-- **Weather** — a [RainViewer](https://www.rainviewer.com) radar tile,
-  decoded, recoloured to the usual green/yellow/red and reprojected into the
+- **Weather** — one picture of the sky in two layers. Cloud from
+  [NASA GIBS](https://nasa-gibs.github.io/gibs-api-docs/) geostationary clean
+  infrared goes down first in cool grey, then a
+  [RainViewer](https://www.rainviewer.com) radar tile over the top of it in
+  the usual green/yellow/red. Both are decoded and reprojected into the
   scope.
 
 ## Settings
@@ -27,8 +30,8 @@ The page adds one **Radar** row to settings. Opening it gives three choices:
   page's `enabled()` answers false, so it leaves the tileview and its worker
   never fetches anything.
 - **Show** cycles Planes, Ships, Weather.
-- **Place** is a list: Bay Area, Los Angeles, New York, Texas, Hormuz, Taiwan
-  Strait, Japan, Korea, Malacca, Panama.
+- **Place** is a list: Bay Area, Los Angeles, New York, Texas, Hormuz,
+  Taiwan, Japan, Korea, Malacca, Panama.
 
 All three are kept in this component's own NVS namespace (`muse_radar`).
 

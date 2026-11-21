@@ -570,11 +570,19 @@ absent in Ships.
   headroom. Tighter than it was and worth watching before the next sizeable
   feature.
 
-## A fourth mode: clouds
+## Clouds, under the rain
 
-The weather mode draws rain. Rain is the exception, not the weather — most of
-the time the scope is empty and the mode looks broken. So there is now a fourth
-mode, **clouds**, and the icon cycles planes → ships → weather → clouds.
+The weather mode drew rain and nothing else. Rain is the exception, not the
+weather — most of the time the scope came up empty and the mode looked broken.
+Cloud was added to fix that, at first as a fourth mode of its own; one look at
+the icon taking four presses to come round settled it, and the two are now one
+picture in **one** mode. The icon still cycles planes → ships → weather.
+
+Cloud is laid down first and rain painted over it, into the same buffer, so a
+cell always wins the pixel it shares with the cloud it falls out of. The two
+passes are independent: either can be empty while the other is the whole
+point, so the picture counts as current if either one landed and the card
+reports the two coverages separately.
 
 **RainViewer no longer has satellite imagery.** Its `satellite.infrared` field
 still appears in the API docs, but the endpoint returns an empty list: the
@@ -631,14 +639,27 @@ Measured on the board:
 ![Clouds over Japan at 250 NM](assets/radar-dev-clouds-japan.png)
 
 A real frontal band and a cloud street, with the coastline visible through the
-gaps. The card names the source rather than pretending to a forecast:
+gaps — that one from the brief life of the separate mode.
 
-![The clouds card](assets/radar-dev-clouds-card.png)
+Merged, the point of the thing shows: cloud bands across Taiwan at 250 NM with
+a rain cell sitting inside one of them, on the island's east coast, where the
+rain-only scope would have shown a green smudge in the dark and the cloud-only
+scope would not have said it was raining.
+
+![Cloud and rain together over Taiwan](assets/radar-dev-weather-merged.png)
+
+![The weather card](assets/radar-dev-weather-merged-card.png)
+
+One pass's picture is slow enough to see: the two fetches are 30–50 s apart at
+250 NM, because four GIBS tiles are around 100 KB each, so cloud appears and
+rain follows it in.
 
 **Known gap: the Indian Ocean.** GIBS carries no Meteosat, so there is a wedge
 between the Himawari and GOES discs with no imagery at all. Hormuz (56.25°E)
-sits on Himawari's western limb and returns nothing at z=6. The card says
-`NO CLOUD DATA HERE` rather than claiming clear sky.
+sits on Himawari's western limb and returns nothing at z=6 — measured, not
+assumed: 0 of 0 pixels, which is a different thing from 0 of 167,601. The card
+separates them, saying `NO IR HERE` where no satellite answered and `NO CLOUD`
+where one did and the sky was clear.
 
 ## Open questions
 
@@ -653,6 +674,14 @@ sits on Himawari's western limb and returns nothing at z=6. The card says
   function.
 - Which place is the default? Shipped as Bay Area, Planes, 40 NM — the one
   that looks alive out of the box.
+- **The Taiwan entry is the island, not the strait.** It was 24.5N 119.5E,
+  which put the scope's centre in open water with Taiwan off to one side; it
+  is now 23.7N 121.0E, the middle of the island, so the island is what the
+  scope is pointed at and the mainland coast and the Ryukyus sit inside the
+  250 NM ring. The baked coastline moved with it — `make_places.py` re-run
+  against Natural Earth 50m, 14 runs and 308 points for that place.
+
+  ![Taiwan centred, 250 NM](assets/radar-dev-taiwan.png)
 - ~~Does the PNG decoder fit?~~ Yes — libpng's simplified reader, not LVGL's,
   decoding 256px tiles one at a time. See "On the board" above for what it
   cost.
