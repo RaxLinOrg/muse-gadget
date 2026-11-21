@@ -1,0 +1,776 @@
+# Radar
+
+**Status:** all three modes run on the board
+**Branch:** `feat/radar`
+**Last updated:** 2026-11-20
+
+## Goal
+
+A swipe page that shows what is moving around a place you care about, drawn as
+a radar scope over a coastline: aircraft overhead, ships in a strait, or where
+the rain is. One setting picks the range, one picks what to show, one picks the
+place, and the range setting's last position is **Off**, which takes the page
+out of the swipe list entirely.
+
+## On the board
+
+Flashed to the 1.75C and snapshotted over the serial console on 2026-11-20.
+These are the real screens; the mockups that led to them are below.
+
+| Planes | The info card | Weather | Ships |
+|---|---|---|---|
+| ![](assets/radar-dev-planes.png) | ![](assets/radar-dev-info.png) | ![](assets/radar-dev-weather.png) | ![](assets/radar-dev-ships-linked.png) |
+
+The Ships shot is after the websocket fork below; `assets/radar-dev-ships.png`
+is the same page before it, saying `NO AIS LINK / no internal RAM`.
+
+The scope is the page: no title, no permanent caption, no card. It fills the
+466 px round display edge to edge. What the captions used to say is behind the
+**i** in the top right — placed by the same chord maths as the speaker button
+on the face page — which raises a card for five seconds and takes it down
+again. Under the icon sits a glyph for what is being shown: an aircraft, a
+ship, or a cloud with rain under it, drawn by the same rasteriser as the
+blips, because LVGL's symbol font has none of the three.
+
+Measured while they ran:
+
+- **Planes: 80 of 187 aircraft kept** within 40 NM of the Bay Area — the
+  80-target cap doing its job on a busy place — *(how: the page's own log line)*
+- **Weather: `z=7, 4 of 4 tiles`.** RainViewer tiles decode, reproject and
+  recolour on the board — *(how: same)*
+- **The PNG decode needs 8 KB of stack.** It overflowed the radar task's
+  original 7,168 bytes outright; at 20,480 the high-water mark leaves 12,608
+  free. The stack is PSRAM, so the headroom costs nothing scarce — *(how: a
+  core dump, then `uxTaskGetStackHighWaterMark`)*
+- **Full screen costs 434 KB of PSRAM per layer.** Free PSRAM goes from
+  1,961 KB to 1,426 KB when weather allocates its rain layer beside the
+  scope — *(how: the link heartbeat either side of a mode change)*
+- **Ships link, but only via a forked websocket client.** The stack had to
+  move to PSRAM; see "Ships were blocked on internal RAM" and the fork below
+  for why, and why the key was never the problem.
+
+### Ships were blocked on internal RAM, not on the key
+
+With a valid key in place the websocket never opens. The reason is specific
+and measured:
+
+- `esp_websocket_client` asks for a **6,144-byte task stack**, and creates it
+  with plain `xTaskCreate` — *(how: read `xTaskCreate` in
+  `esp_websocket_client.c` 1.2.3)*. `xTaskCreate` only ever allocates from
+  internal RAM.
+- Internal RAM on this build runs at **3–12 KB free with a largest free block
+  of 3,200–3,840 bytes** — *(how: `heap_caps_get_largest_free_block` logged at
+  each failure)*. A 6 KB contiguous request cannot be met, and TLS will not
+  fit in 3 KB either.
+- `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM` is already `y`, but it only
+  applies to `xTaskCreateStatic`, which this component does not use — *(how:
+  read the option's help text in `freertos/Kconfig`)*.
+
+Two things were moved out of internal RAM on the way to finding this, and both
+are worth keeping: the 4 KB AIS reassembly buffer now comes from PSRAM, and
+the client's own transmit and receive buffers went from 4 KB each to 2 KB,
+since AIS position reports are a few hundred bytes. Neither freed a large
+enough contiguous block.
+
+**Freeing internal RAM does not work. This was measured, not assumed.**
+`muse_crash_log` keeps an 8,204-byte ring in `.bss`, which is the single
+largest reclaimable piece of internal RAM on the board. Building with
+`CONFIG_MUSE_CRASH_LOG=n` — the best case, the whole ring gone — gives this:
+
+| At a fixed probe 60 s after boot | With the ring | Without it |
+|---|---|---|
+| Largest free internal block | 2,944 / 3,712 / 4,096 / 4,096 | 8,192 / 9,216 / 10,752 / 3,968 |
+
+So removing it really does open a block big enough, three times in four, at
+that moment. But at the moment that matters — when Ships actually asks for
+its task — the largest block is **3,968 bytes without the ring against
+3,200–3,840 with it**. The 8 KB is reclaimed and then spent again during
+bring-up before the websocket is ever started. The stream still does not open.
+*(how: four boots each way, probed with `>page=radar:mem` at a fixed point,
+then the real attempt watched in both builds)*
+
+The lesson is the one the measurement was designed to catch: a bigger block at
+one moment is not a bigger block at the moment of use. Nobody should give up a
+crash log for this.
+
+What would actually unblock it, in rough order of effort:
+
+1. ~~Free internal RAM elsewhere in the firmware.~~ Measured and dead, above.
+2. **Vendor `esp_websocket_client` into `components/`** and change its one
+   `xTaskCreate` to `xTaskCreateStatic` with a PSRAM stack buffer, which
+   `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y` already permits. Self-
+   contained, but it forks a component. **This is the only route left that
+   does not depend on the rest of the firmware getting smaller.** Done — see
+   below.
+3. Drop ships.
+
+The fork is confirmed on the board: `radar.ais: subscribed to Bay Area,
+40 nm`, and real contacts on the scope.
+
+### The fork that unblocks it
+
+`components/esp_websocket_client/` is a copy of upstream 1.2.3 (esp-protocols
+`1750a3fd`), and being a local component it overrides the managed dependency
+that `main/` and `components/muse_radar/` both declare. Its own `README.md`
+carries the detail; every edit in `esp_websocket_client.c` is marked
+`muse fork`, so a diff against the component-manager cache shows exactly what
+changed and nothing else.
+
+One 8 KB PSRAM stack and one internal `StaticTask_t` live in file scope and
+are lent to a single client at a time through `xTaskCreateStatic`. A second
+concurrent client falls back to upstream's `xTaskCreate`, so the fork cannot
+make anything worse than it was.
+
+The part that needed care is not the allocation but the teardown. The idle task
+does **not** free a static task's buffers, so a static task that deletes itself
+leaks its stack — and reusing the buffers while the dead TCB is still on the
+termination list would corrupt that list. So the static task does not delete
+itself: it sets `STOPPED_BIT` and parks on `vTaskSuspend()`, and `ws_slot_reap()`
+deletes it from whichever task asked it to stop. That is always another task,
+because upstream's `stop()` and `close()` already refuse to run on the
+websocket task, and deleting *another* task frees its TCB synchronously — so
+the slot is free the moment `ws_slot_reap()` returns. `ws_slot_reap()` is
+called from `stop()`, from both exits of `close()`, and from `destroy()`, and
+is idempotent. The one path where the task really does delete itself,
+`esp_websocket_client_destroy_on_exit()`, retires the slot instead of reusing
+it; radar never takes that path.
+
+Costs worth knowing: carrying the fork across IDF updates (re-copy upstream,
+re-apply the `muse fork` blocks), and 8 KB of PSRAM held for the lifetime of
+the firmware once Ships has run.
+
+**On the board.** The stream opens, and the measurement that mattered is that
+it opens *without* internal RAM having got any better: largest free internal
+block at the moment Ships asks is still **3,968 bytes**, the same number that
+used to turn it away. The stack is simply somewhere else now.
+
+![Ships, linked](assets/radar-dev-ships-linked.png)
+
+The teardown was then exercised directly, since slot reuse is the part of the
+fork that could corrupt something rather than merely fail: five switches
+away to Planes and back to Ships. Four re-subscribed inside the watch window
+and the fifth inside the retry backoff; no panic, no assert, no heap
+complaint. Largest free internal block held at 3,968 across all five and PSRAM
+held at 1,441,792, so neither the slot nor the client leaks per cycle —
+*(how: `>page=radar:planes` / `:ships` / `:mem` over five cycles)*.
+
+Driving it from the bench: `>page=radar:planes` / `:ships` / `:weather`,
+`>page=radar:12` / `:40` / `:250` / `:off`, `>page=radar:place=3`,
+`>page=radar:info` to raise the card since the console cannot tap,
+`>page=radar:tap=mode` / `:tap=nm` / `:tap=city` for the three on-scope taps
+for the same reason, and
+`>page=radar:mem` for free and largest-block internal and PSRAM at that
+instant — the largest block is what a task stack needs, and on this board it
+is the number that decides things.
+
+## Driving it from the scope
+
+Everything the page can be set to is now reachable without leaving it, because
+the settings page is four swipes and a scroll away from a screen whose whole
+point is being glanced at.
+
+| Planes at 250 NM | The card | Weather at 250 NM | Ships |
+|---|---|---|---|
+| ![](assets/radar-dev-planes-250.png) | ![](assets/radar-dev-card.png) | ![](assets/radar-dev-weather-250.png) | ![](assets/radar-dev-ships-card.png) |
+
+- **The mode glyph is a button.** Tapping it walks planes → ships → weather and
+  round again. The glyph is rasterised into the scope image and cannot take a
+  tap itself, so a 44 px transparent box sits over it and does.
+- **The card's first line is two buttons.** The range on the left, the place on
+  the right, each cycling to the next value and each holding the card up for
+  another five seconds so a place can be walked through without it vanishing
+  mid-tap. The range cycles 12 / 40 / 250 only: **Off** stays a settings-page
+  decision, because choosing it from the scope would delete the page out from
+  under the finger that chose it.
+- **Any change clears the scope.** A range change used to keep the old sweep
+  and merely ask for a new one, which left every blip at the wrong radius until
+  the fetch landed. Mode, range and place all reset now, and the reset drops
+  the rain picture too, since it was projected for one place at one zoom and a
+  setting change invalidates both.
+
+### What the card says now
+
+Only ships are labelled on the scope. Eighty aircraft three tags at a time was
+noise over the thing the tags were meant to annotate; ship names stay because
+there are few of them and the name is the whole point. That makes the card the
+only place a plane is named, so it carries the nearest contact, its altitude or
+speed, how far away it is, and how many of what is out there fit on the scope —
+`80/421` is the cap doing its job, not a failed fetch.
+
+Weather answers a question it used to dodge. `s_fresh` meant "a picture
+landed", and the card read that as "RAIN", so dry sky over the whole state
+still said it was raining. Wet pixels are counted during the blit now, and the
+card says `NO RAIN IN RANGE`, `RAIN UNDER 1%` or `RAIN n% OF SCOPE`, with the
+zoom the picture was cut at.
+
+The card had to grow from 250 px to 360 to do this. At 250 the two halves of
+the first line overprinted each other — `250LNM Angeles` — and both lines under
+it ran off both edges:
+
+![The 250 px card](assets/radar-dev-card-250wide.png)
+
+### Big enough to hit, and to read
+
+| The card | 250 NM at cap 300 |
+|---|---|
+| ![](assets/radar-dev-card4.png) | ![](assets/radar-dev-planes-250-cap300.png) |
+
+- **Both icons grew.** The info icon went 36 → 52 px and the mode glyph scales
+  with it, because a 22 px drawing inside a 44 px hit box reads as decoration
+  rather than as something to press, and missing it is the normal outcome.
+- **The card grew with them**, 360 × 92 → 400 × 124, and took a fourth line.
+  It is only up for five seconds, so it may as well say everything worth
+  saying while it is there: where the scope is pointed, what is nearest, how
+  far and how many, and what the source is doing — age of the sweep, whether
+  the last fetch failed, and the cap in force.
+- **It also moved below centre.** At four lines it was tall enough to swallow
+  the mode glyph it shares the top right with, and a control you cannot see is
+  worse than a card in an awkward place.
+- **A second tap on the info icon puts the card away.** The five-second timer
+  is still there for the tap that is never followed by another one.
+
+### Rings, not the nearest eighty
+
+The 80-target cap kept the nearest 80, which looked right at 12 NM and wrong at
+250: a busy place has 80 aircraft within 30 miles, so the cap filled long before
+the edge and the outer two thirds of the scope was always empty. The scope is
+divided into four range rings now, each holding a share of the cap and lending
+what it does not use to the others; within a ring the near ones still win. Los
+Angeles at 250 NM keeps 80 of 421 and spreads them to the edge — *(how: the
+screenshot above, and the page's own log line)*.
+
+**The cap itself follows the range: 80 at 12 and 40 NM, 300 at 250.** Spreading
+80 contacts over four hundred times the area still looked thin, and 250 NM is
+the range where the whole point is how much is out there. The Bay Area at
+250 NM keeps 196 of 250 — *(how: `Bay Area: 196 of 250 aircraft kept, cap 300`)*.
+
+### What 300 contacts cost, and where they live
+
+300 contacts is 10.8 KB, and the old design could not hold it anywhere. The
+sweep struct carried its contacts inline, which put one copy in internal
+`.bss`, two more on task stacks, and a 10.8 KB `memcpy` inside a spinlock on
+every publish. All three are unacceptable on this board, the first most of all.
+
+So the contacts moved out of the struct. A sweep now carries a pointer to an
+array in PSRAM, and there are exactly three arrays: the worker's scratch, the
+published one, and the page's. Publishing swaps two pointers under the lock
+and copies no contacts at all; reading swaps again, so the page walks away
+with the published array and leaves its previous one behind to be refilled. A
+`seq` counter is what tells a reader "nothing new" from "nothing", which is
+what stops a page that polls several times a second from blanking the scope
+between sweeps.
+
+Internal RAM is untouched by the change — free internal sat at 8,647 bytes
+with the cap at 300 — because every contact is in PSRAM and nothing is copied
+through a stack — *(how: `>page=radar:mem` with 196 contacts loaded)*.
+
+## The AIS key, and where it lives
+
+Ships are the one mode that needs a credential. Planes and weather need none.
+
+1. Sign in at <https://aisstream.io/account> with GitHub — free, no card.
+2. **Create API Key**, name it anything (`muse-gadget` does), and copy the
+   40-character hex string it gives you. It is shown in full on the account
+   page afterwards, so it does not have to be caught on first sight.
+3. Put it in `esp32/devices/sdkconfig.local`, which does not exist until you
+   make it and is gitignored:
+
+   ```
+   CONFIG_MUSE_RADAR_AIS_KEY="your-key-here"
+   ```
+
+4. `chmod 600` it and rebuild. `tools/muse/board.sh` appends that file to the
+   defaults list last, so it wins over every committed one.
+
+**It must not go in any other config file.** `sdkconfig.defaults` and
+everything under `devices/` except `sdkconfig.local` is committed, and a key
+pushed to a public repository is a key you have to rotate. The gitignore entry
+and the `board.sh` hook exist for exactly this.
+
+Left unset, Ships still draws its scope and says `NO AIS KEY` instead of
+pretending to have contacts.
+
+## Mockup
+
+Planes, 40 nm around the Bay Area. Every blip is an aircraft that was really in
+the air at 12:28 on 2026-11-20, placed where the API said it was; the coastline
+is Natural Earth 50m, clipped and projected the same way the firmware would:
+
+![Radar page, planes](assets/radar-green.png)
+
+### Green, and a map behind it
+
+Yes to both. Green is the right call and the map is nearly free — the coastline
+around a place costs **660–2,400 bytes** as int16 pairs, so every place in the
+list together is about 15 KB of flash with no tile server, no projection
+library and nothing to download at runtime. At this scale plain
+equirectangular is accurate enough; the error over a 250 nm radius is smaller
+than a blip.
+
+It does mean the page does not match the violet the rest of the firmware uses.
+That is the right trade: this page is pretending to be an instrument, and the
+coastline needs a colour the blips can sit on top of without competing. Here is
+what it looked like in violet without the map, for comparison — flatter, and
+without the coast there is nothing to tell you *where* you are looking:
+
+![The earlier violet version](assets/radar-mockup.png)
+
+## What to show
+
+### Planes
+
+Covered below in Findings: keyless, and the API returns range and bearing
+already computed.
+
+### Ships — possible, with two catches
+
+![Ships in the Malacca Strait](assets/radar-ships.png)
+
+Drawn the way a ship's own ARPA display does it, since that is the look worth
+copying: a bearing scale in degrees around the rim, own-ship heading line, each
+contact as an echo smear with the AIS triangle over it, a vector showing where
+it will be in ten minutes, and a dotted past track. The bottom strip carries
+bearing, range and speed over ground for the ringed target.
+
+*Illustrative: the contacts are on plausible lane positions, not live AIS.
+Everything else in this file comes from real data.*
+
+AIS is a different kind of feed from the plane one. `aisstream.io` is free, but:
+
+1. **It needs an API key** (sign in with GitHub) — a second token to store on
+   the device, like the SDK token already is.
+2. **It is a WebSocket stream, not a poll.** You connect to
+   `wss://stream.aisstream.io/v0/stream`, send a `BoundingBoxes` subscription
+   within 3 seconds, and then read continuously or the service drops your
+   messages.
+
+The catch that matters: since September 2026 uncompressed connections are
+subject to per-user bandwidth limits, so the stream wants `permessage-deflate`.
+**ESP-IDF has no permessage-deflate** — `esp_websocket_client` is a managed
+component rather than part of the tree, and grepping the local v6.0.1
+components for it returns nothing. So ships are not "the same page with
+different blips"; they are a websocket client plus a deflate negotiation.
+
+AISHub is not an option at all: it gives API keys only to people who feed it
+their own receiver's data.
+
+### Weather — a real radar picture, from a tile
+
+![Rain over the Taiwan Strait](assets/radar-weather.png)
+
+That is live RainViewer data, composited and recoloured exactly the way the
+firmware would: one PNG tile, decoded, re-mapped to a green/yellow/red scale,
+masked to the scope, with the coastline drawn over it. The rain southwest of
+Taiwan was really there when it was sampled.
+
+**This replaces the polar-grid idea, and the reason is a rate limit.** The
+first plan was to sample Open-Meteo on a polar grid, since the firmware already
+talks to it. Open-Meteo does accept many coordinates in one request — 441
+points came back in 150 KB in 338 ms. But its response headers say
+`X-RateLimit-Limit: 600` over a 60-second window, and **it bills per location,
+not per request**: three test grids in one minute (766 points) took the
+remaining quota to zero. A 441-point grid is 441 calls against a 10,000/day
+free allowance — about **22 refreshes a day**. Resolution trades directly
+against refresh rate, and the resolution you can afford looks like this:
+
+![The 24-cell version this replaces](assets/radar-weather-grid.png)
+
+A RainViewer tile costs **one request** no matter how much detail is in it.
+
+What it costs: 11.5 KB for a 256px tile, 32 KB for 512px, no key needed. The
+device has to decode PNG (RGBA8, so a 512px tile is 1 MB decoded — PSRAM
+territory, not internal RAM) and reproject from Web Mercator, which is a dozen
+lines. Zoom is capped: z=7 works, **z=8 returns a "Zoom Level Not Supported"
+placeholder image**, so the tightest useful view is about 40 nm across and
+12 NM range would be showing a blown-up z=7 tile.
+
+Terms: RainViewer's API is personal and educational use only, with attribution
+asked for — hence "RainViewer" in the corner of the mockup. That is fine for a
+gadget on a desk and would not be fine for a product.
+
+## Where to point it
+
+All ten places, 250 nm each, sampled the same afternoon:
+
+![Ten places compared](assets/radar-places.png)
+
+| Place | Airborne | Verdict |
+|---|---|---|
+| New York | 1,002 | Too many — 615 KB per refresh |
+| Texas (DFW) | 860 | Too many — 476 KB |
+| Los Angeles | 583 | Very busy, 375 KB |
+| Bay Area | 312 | Busy, 217 KB |
+| Hormuz | 46 | Thin for planes, interesting for ships |
+| Korea | 34 | Thin — see below |
+| Taiwan Strait | 33 | Thin — see below |
+| Japan | 33 | Thin — see below |
+| Malacca | 20 | The point here is the shipping |
+| Panama Canal | 5 | Planes: nothing. Ships: the whole point |
+
+Three things this settles:
+
+- **East Asia is thin because of who is feeding, not what is flying.** Tokyo
+  returning 33 airborne aircraft inside 250 nm is not believable — Haneda alone
+  moves well over a thousand a day. ADS-B aggregators are fed by volunteers
+  with receivers, and there are far fewer of them in Japan, Korea and Taiwan
+  than in the US. Cross-checked against a completely separate network,
+  `opendata.adsb.fi`, which gave 45 / 43 / 40 for Japan / Korea / Taiwan
+  against 468 for the Bay Area — the same ratio. So a Taiwan or Japan radar
+  page will look quiet, and that is the data, not a bug. The page should never
+  imply it is showing all the traffic.
+- **Texas behaves like New York and Los Angeles**: 860 airborne in a 476 KB
+  body. The big-metro cap applies to it too.
+- **Panama has 5 aircraft.** Picking it in Planes mode is close to an empty
+  screen; it earns its place in the list through Ships, and the page should
+  say "5 aircraft" rather than look broken.
+
+Ukraine is gone from the list. It returned **zero** aircraft — closed civil
+airspace, and military traffic does not broadcast ADS-B — so there was nothing
+to show and no fix available on our side.
+
+## Config
+
+One row in the main settings list, as before — it opens the page's own
+settings, which is where the three choices live:
+
+![Settings](assets/radar-config.png)
+
+- **Range** — `12 NM` / `40 NM` / `250 NM` / `Off`. Note that in Weather mode
+  12 NM is a magnified z=7 tile rather than more detail. Off is a real off:
+  `muse_page_t.enabled()` is checked before the tile is built, so the page
+  leaves the swipe list and its task never starts. No page, no polling.
+- **Show** — `Planes` / `Ships` / `Weather`.
+- **Place** — the table above.
+
+## How often it refreshes
+
+The proposal was one interval per range — hourly at 250 NM, every 30 minutes at
+40 NM, every 1–5 minutes at 12 NM — on the assumption that this keeps clear of
+the rate limit. It does, by a wide margin. The problem is the other end: those
+intervals are slow enough that the page stops being a radar and becomes a
+series of unrelated snapshots.
+
+![How far a blip moves between refreshes](assets/radar-cadence.png)
+
+Measured rather than reasoned: two samples 92 seconds apart over the Bay Area,
+313 aircraft matched by hex. The median one moved **6.43 nm**, which is
+4.2 nm per minute. The scope is 300 px across. So:
+
+| Range | Crossing time | Proposed | Jump per refresh | Suggested | Jump |
+|---|---|---|---|---|---|
+| 12 NM | 3.2 min | 5 min | 262 px — off the scope | **30 s** | 26 px |
+| 12 NM | | 1 min | 53 px | | |
+| 40 NM | 10.7 min | 30 min | 471 px — off the scope | **60 s** | 16 px |
+| 250 NM | 66.7 min | 1 hour | 151 px — half the scope | **5 min** | 13 px |
+
+**The direction of the idea is right** — wide views genuinely do tolerate
+slower refresh, because a 450 kt aircraft needs 67 minutes to cross 250 NM but
+only 3.2 to cross 12 NM. The magnitudes are about 10x too slow. At 40 NM every
+30 minutes, each refresh replaces the entire picture: 7% of targets had already
+churned in 92 seconds, and over half an hour nothing on screen would be the
+same aircraft twice. Of the two options at 12 NM, **1 minute is the right one**
+and 5 minutes is not — at 5 minutes a plane enters and leaves between frames.
+
+**The rate limit does not require slowing down, because the page only polls
+while it is visible.** At a 30-second refresh, adsb.lol's 500/day buys 4 hours
+of looking; at 60 seconds, 8 hours. Nobody watches a desk gadget for 4 hours.
+What the limit rules out is background polling, which is already out — and the
+freshness worry it was meant to solve is better handled by refreshing **once
+when the page becomes visible**, then settling into the cadence above. That
+costs one request per visit instead of 24 a day per place.
+
+### It only applies to planes
+
+- **Weather has no choice in the matter.** RainViewer publishes a frame every
+  **600 seconds exactly**, and the newest frame was already 5.4 minutes old
+  when fetched. Polling faster than 10 minutes re-downloads an identical tile;
+  polling hourly skips five frames. So weather is 10 minutes at every range,
+  and the range setting changes the zoom, not the cadence.
+- **Ships have no refresh interval at all.** AIS over `aisstream.io` is a
+  WebSocket stream — positions arrive when vessels transmit, which under the
+  AIS standard is every 2–10 seconds for a moving Class A ship. There is
+  nothing to poll; the only knob is how often the screen redraws, and a second
+  is plenty.
+
+So the setting should not be a user-facing "refresh every N". It should be a
+property of the range in Planes mode, fixed at 10 minutes in Weather, and
+absent in Ships.
+
+## Plan
+
+1. New component `muse_radar`, modelled on `muse_clock` — own NVS namespace,
+   own `MUSE_PAGE`, own settings sub-page. No edits to files upstream touches.
+2. A place table of `{name, lat, lon, coastline}` generated at build time from
+   Natural Earth by a script in `tools/`, so adding a place is a one-line edit
+   and a rebuild.
+3. Planes first: `esp_http_client` + `cJSON`, the `muse_weather.c` shape, with
+   a cap on aircraft kept.
+4. Draw: coastline, rings, blips, the nearest one ringed with a card below.
+5. Weather second: one RainViewer tile, a PNG decoder, Web Mercator
+   reprojection into the scope, and our own colour ramp over the decoded
+   pixels. Check what LVGL's PNG decoder costs in heap before committing.
+6. Ships last, and only if the websocket question answers well.
+
+## Findings
+
+- **adsb.lol serves planes keyless over HTTPS.**
+  `GET https://api.adsb.lol/v2/point/{lat}/{lon}/{radius_nm}`, 200, no key —
+  *(how: curl, 2026-11-20, samples kept for 8 places)*
+- **The API does the trigonometry.** Each aircraft carries `dst` (nm from the
+  query point) and `dir` (bearing), so a blip is `r = dst/range * R`,
+  `θ = dir` — no projection for the blips at all. The coastline *does* need
+  projecting, but only once, at build time — *(how: read the fields; checked
+  `dir` against an aircraft known to be southwest of Taipei, 242.7°)*
+- **500 requests per IP per day**, from `x-ratelimit-limit: 500, 500;w=86400`
+  on the live response. Visible-only polling at 30 s buys ~4 hours of watching
+  a day — *(how: response headers)*
+- **The median aircraft moves 4.2 nm a minute.** Two samples 92 s apart over
+  the Bay Area, 313 targets matched by hex: median 6.43 nm, p90 11.8 nm, and 7%
+  of targets churned out of the set in that time — *(how: diffed the two
+  samples)*
+- **RainViewer publishes every 600 s**, 13 frames covering 2 hours, newest
+  frame 5.4 minutes old at fetch — *(how: timestamps in weather-maps.json)*
+- **Open-Meteo bills per location, not per request.** It accepts many
+  coordinates at once (441 points, 150 KB, 338 ms) but the response carries
+  `X-RateLimit-Limit: 600` on a 60-second window, and three grids totalling 766
+  points in one minute drove `X-RateLimit-Remaining` to 0. Against a 10,000/day
+  free allowance a 441-point grid buys ~22 refreshes a day — *(how: response
+  headers while testing 100, 225 and 441-point grids)*
+- **A RainViewer tile is one request at any resolution.** 11.5 KB at 256px,
+  32 KB at 512px, no key, PNG RGBA8. Zoom caps out: z=7 serves data, **z=8
+  returns a 1,370-byte "Zoom Level Not Supported" image** — *(how: fetched
+  tiles for five places at z=6, 7 and 8 and looked at them)*
+- **East Asian ADS-B coverage is roughly a tenth of the US.** Japan 33, Korea
+  34, Taiwan 33 airborne within 250 nm against the Bay Area's 312 — and the
+  same ratio on an unrelated network (adsb.fi: 45 / 43 / 40 against 468). It is
+  feeder density, not traffic — *(how: queried both networks for the same four
+  places within a minute of each other)*
+- **Coastlines are nearly free.** Natural Earth 50m clipped to 250 nm:
+  Bay Area 165 points, Hormuz 200, Taiwan Strait 283, Panama 323, Malacca 532,
+  New York 601 — 660 to 2,404 bytes each as int16 pairs — *(how: clipped the
+  1.6 MB GeoJSON locally and counted)*
+- **`alt_baro` is an int *or* the string `"ground"`.** 98 of 192 aircraft
+  within 60 nm of San Jose were parked — *(how: counted in the sample)*
+- **New York at 250 nm is 1,199 aircraft in a 615 KB body, Texas 911 / 476 KB,
+  and Ukraine 0 in 101 bytes** — *(how: the ten-place sample above, plus
+  Ukraine before it was dropped)*
+- **ESP-IDF has no permessage-deflate.** Nothing in the v6.0.1 component tree
+  matches it, and `esp_websocket_client` is not in the tree at all — *(how:
+  grepped `~/esp/esp-idf-v6.0.1/components`)*
+- **Two page slots are free.** `MUSE_PAGES_MAX` is 4; only `clock` and `radio`
+  register — *(how: `git grep MUSE_PAGE(`)*
+
+## Blockers
+
+- Planes and weather: none, both run on the board.
+- Ships: none. The forked `esp_websocket_client` (see "The fork that
+  unblocks it") opens the stream on the board, and five teardown cycles left
+  nothing leaking.
+- The app binary is now **3.82 MB in a 4 MB `ota_0` slot**, ~190 KB of
+  headroom. Tighter than it was and worth watching before the next sizeable
+  feature.
+
+## Clouds, under the rain
+
+The weather mode drew rain and nothing else. Rain is the exception, not the
+weather — most of the time the scope came up empty and the mode looked broken.
+Cloud was added to fix that, at first as a fourth mode of its own; one look at
+the icon taking four presses to come round settled it, and the two are now one
+picture in **one** mode. The icon still cycles planes → ships → weather.
+
+Cloud is laid down first and rain painted over it, into the same buffer, so a
+cell always wins the pixel it shares with the cloud it falls out of. The two
+passes are independent: either can be empty while the other is the whole
+point, so the picture counts as current if either one landed and the card
+reports the two coverages separately.
+
+**RainViewer no longer has satellite imagery.** Its `satellite.infrared` field
+still appears in the API docs, but the endpoint returns an empty list: the
+feed was discontinued on 2026-01-01
+(*[transition FAQ](https://www.rainviewer.com/api/transition-faq.html)*). The
+replacement is **NASA GIBS**, whose WMTS REST layout is a drop-in for the tile
+fetcher already in `muse_radar_rain.c`:
+
+```
+https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/{layer}/default/default
+    /GoogleMapsCompatible_Level6/{z}/{row}/{col}.png
+```
+
+`default` in the time slot means the newest frame. The layer is picked by
+longitude, because each one is a different geostationary satellite:
+
+| Longitude | Layer |
+|---|---|
+| ≥ 40°E or ≤ 150°W | `Himawari_AHI_Band13_Clean_Infrared` |
+| ≤ 100°W | `GOES-West_ABI_Band13_Clean_Infrared` |
+| otherwise | `GOES-East_ABI_Band13_Clean_Infrared` |
+
+Two things about these tiles caught the code out:
+
+- **They are photographs, not sparse overlays.** A single z=5 tile over New
+  York is 96,871 bytes, where the rain tiles were a few KB. `PNG_MAX` had to go
+  from 64 KB to 192 KB; below that libpng reported "read beyond end of data" on
+  three tiles in four.
+- **There is no fixed threshold for "cloud".** Clean infrared is a *brightness
+  temperature* picture, so the clear-sky baseline moves with the ground
+  underneath it. Measured inside the scope, the median pixel is 0.38 over
+  Panama, 0.42 over the Taiwan Strait and 0.53 over both the Bay Area and New
+  York. A floor of 0.38 painted the entire scope (exactly 167,601 px — the
+  scope's whole area); a floor of 0.62 painted nothing almost everywhere.
+
+So the floor is **relative**: the tiles are blitted as raw brightness into a
+scratch buffer, a 256-bin histogram finds the median of the pixels actually in
+scope, and the cloud floor is `median + 0.10`. That number was found by
+replicating the firmware's reprojection in a host script and histogramming real
+tiles, rather than by guessing on hardware — and the board's own medians then
+came back within 0.03 of the host's at every place tried, which cross-checks the
+projection maths as a side effect.
+
+Measured on the board:
+
+| Place | Range | Painted |
+|---|---|---|
+| Japan | 250 NM | 53,855 of 160,921 px (33%) |
+| Taiwan Strait | 250 NM | 41,764 of 142,914 px (29%) |
+| Bay Area | 250 NM | 21,648 of 149,084 px (14.5%) |
+| Panama | 40 NM | 2,749 of 167,601 px (1.6%) |
+| Taiwan Strait | 40 NM | 0 px — genuinely clear |
+
+![Clouds over Japan at 250 NM](assets/radar-dev-clouds-japan.png)
+
+A real frontal band and a cloud street, with the coastline visible through the
+gaps — that one from the brief life of the separate mode.
+
+Merged, the point of the thing shows: cloud bands across Taiwan at 250 NM with
+a rain cell sitting inside one of them, on the island's east coast, where the
+rain-only scope would have shown a green smudge in the dark and the cloud-only
+scope would not have said it was raining.
+
+![Cloud and rain together over Taiwan](assets/radar-dev-weather-merged.png)
+
+![The weather card](assets/radar-dev-weather-merged-card.png)
+
+One pass's picture is slow enough to see: the two fetches are 30–50 s apart at
+250 NM, because four GIBS tiles are around 100 KB each, so cloud appears and
+rain follows it in.
+
+**Known gap: the Indian Ocean.** GIBS carries no Meteosat, so there is a wedge
+between the Himawari and GOES discs with no imagery at all. Hormuz (56.25°E)
+sits on Himawari's western limb and returns nothing at z=6 — measured, not
+assumed: 0 of 0 pixels, which is a different thing from 0 of 167,601. The card
+separates them, saying `NO IR HERE` where no satellite answered and `NO CLOUD`
+where one did and the sky was clear.
+
+## Open questions
+
+- ~~Does cJSON survive a 615 KB body on this board?~~ Settled by not asking it
+  to: the response is parsed as it arrives, one aircraft object at a time, so
+  the body is never held. Only the kept targets cost memory.
+- **Supplier risk on the plane feed.** `github.com/adsblol/api` was archived by
+  its owner on **2026-11-19** and warns a key will eventually be needed;
+  airplanes.live has already closed its public API; `api.adsb.one` returned
+  403. `opendata.adsb.fi` answered fine with the same field names and is the
+  fallback — *(how: curl, all four, 2026-11-20)*. Keep the source behind one
+  function.
+- Which place is the default? Shipped as Bay Area, Planes, 40 NM — the one
+  that looks alive out of the box.
+- **The Taiwan entry is the island, not the strait.** It was 24.5N 119.5E,
+  open water with Taiwan off to one side. Centring on the island itself
+  (23.7N 121.0E) pointed the scope at the right place but put the middle of
+  the scope on the Central Mountain Range: at 12 and 40 NM both planes and
+  ships came back empty, because the near rings were all land. It now sits
+  at **24.2N 120.4E, offshore of Taichung** — the island still fills the
+  scope, and the 40 NM ring takes in the strait's shipping lane. The baked
+  coastline moved with it, `make_places.py` re-run against Natural Earth 50m.
+
+  ![Taiwan centred, 250 NM](assets/radar-dev-taiwan.png)
+- ~~Does the PNG decoder fit?~~ Yes — libpng's simplified reader, not LVGL's,
+  decoding 256px tiles one at a time. See "On the board" above for what it
+  cost.
+- Should the device recolour the tile, or is RainViewer's own palette good
+  enough? It has to decode the pixels either way, so recolouring to match the
+  rest of the page is nearly free — the mockup above does it.
+
+## What a refresh actually costs
+
+The page felt slow in every mode, so it was measured rather than guessed at,
+by timing three phases separately: opening the connection, pulling the body
+down, and decoding it into the scope.
+
+| | connect | body | decode |
+|---|---|---|---|
+| Clouds pass | 2.8–4.1 s | 0.3 s | **21–31 s** |
+| Rain pass | 13.8–14.7 s | ~0 s | **27–30 s** |
+| Planes | 3.3–4.1 s | 0.002–1.7 s | — |
+
+Neither number was where the guess had put it. The network was never the
+problem: a weather pass moved about 400 KB in a third of a second.
+
+**Decode was 30 s because of a double-precision sin() inside the pixel loop.**
+`blit_tile()` turned each screen pixel into a latitude and longitude and then
+called `merc_y()` — a `sin()` and a `log()`, both software-emulated on this
+chip — plus two divisions, for every one of the ~167,000 pixels inside the
+scope. Four tiles a pass, two passes a cycle: 1.3 million of them.
+
+None of it depended on which tile was being drawn, and the mapping separates:
+the tile column a screen pixel lands in depends only on its x, the row only on
+its y. So it became two arrays of 466 floats, filled once a pass, and the
+inner loop became two lookups and a subtraction.
+
+**Connect was 14 s because each tile opened its own TLS session.** Four tiles,
+four full handshakes at ~3.5 s each, to one host. `keep_alive_enable` does not
+fix this: reading IDF's `esp_http_client.c`, `esp_http_client_close()` calls
+`esp_transport_close()`, and `esp_http_client_open()` sets the state to
+CONNECTING and then connects unconditionally — the socket is only held across
+requests by `esp_http_client_perform()`, which this code does not use. What
+does carry over is the **TLS session ticket**, which `open()` looks for and
+resumes from. That needs `CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS=y` (RFC 5077;
+`MBEDTLS_CLIENT_SSL_SESSION_TICKETS` was already on) and `save_client_session`
+on the client config. The first tile pays the handshake and the rest resume.
+
+Measured again on the board, same place and range:
+
+| | before | after |
+|---|---|---|
+| Clouds pass | ~35 s | **2.2 s** |
+| Rain pass | ~43 s | **6.6 s** |
+| Weather cycle | ~78 s | **~9 s** |
+
+Rain's connect is still 6 s against clouds' 1.5 s, because the RainViewer pass
+also fetches the frame index from a second host, which cannot share a ticket
+with the tile host.
+
+![Japan at 250 NM after the speedup](assets/radar-dev-weather-japan-fast.png)
+
+The rain band sits on the cloud band it falls out of, and the coastline is
+registered under both — which is the check that matters, since the projection
+was rewritten.
+
+## The information icon
+
+It was an "i" in a black circle and the two were never concentric. The cause
+was not an alignment setting: the circle *was* the label's background box, and
+a label puts its text on the baseline inside that box, so the glyph rode high
+and left however `text_align` was set.
+
+It is now rasterised into the scope like the mode glyph — disc, ring, dot and
+stem all measured from one centre — with an invisible box over it taking the
+tap. LVGL's symbol font has no information or question-mark glyph, so the
+circled *i* stays; it was drawn wrong, not chosen wrong.
+
+![The info icon](assets/radar-dev-info-icon.png)
+
+## References
+
+- Files to add: `esp32/components/muse_radar/`
+- Patterned on: `esp32/components/muse_clock/muse_clock.c`,
+  `esp32/components/muse_clock/muse_weather.c`
+- Page contract: `esp32/components/muse/muse_page.h`
+- Data: [adsb.lol](https://api.adsb.lol/v2/point/), [adsb.fi](https://opendata.adsb.fi/),
+  [aisstream.io](https://aisstream.io/documentation),
+  [RainViewer](https://www.rainviewer.com/api.html),
+  [NASA GIBS](https://nasa-gibs.github.io/gibs-api-docs/),
+  [Open-Meteo](https://api.open-meteo.com/v1/forecast),
+  [Natural Earth coastline](https://github.com/nvkelso/natural-earth-vector)
+- Prior art: [Alex-developer/ADSB-Radar](https://github.com/Alex-developer/ADSB-Radar)
+  (ESP32-P4, same idea, worth reading for the altitude colouring)

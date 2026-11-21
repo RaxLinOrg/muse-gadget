@@ -96,6 +96,9 @@ if [ -n "${MUSE_BENCH:-}" ]; then
     B=$B-bench; defaults="$defaults;devices/sdkconfig.muse-bench"
 fi
 [ -n "${iris:-}" ] && defaults="$defaults;devices/sdkconfig.muse-$profile-iris"
+# devices/sdkconfig.local is gitignored and comes last, so it wins. It is where
+# a key belongs: anything in a committed defaults file ends up on GitHub.
+[ -f devices/sdkconfig.local ] && defaults="$defaults;devices/sdkconfig.local"
 log=/tmp/muse_build_$board.log
 # ESP-Mosaico: its Vibe Mode firmware installs an ESP-Iris System Update
 # bundle (the app and this partition table; never the bootloader or the

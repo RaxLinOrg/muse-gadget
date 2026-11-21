@@ -1,0 +1,23 @@
+menu "Muse radar page"
+
+config MUSE_RADAR_ENABLED
+    bool "Radar page"
+    default y
+    help
+        Adds a swipe page showing what is moving around a place you pick:
+        aircraft overhead, ships in a strait, or where the rain is. The
+        page's own settings choose the range, which of the three to show,
+        and the place. Setting the range to Off takes the page out of the
+        tileview without rebuilding.
+
+config MUSE_RADAR_AIS_KEY
+    string "aisstream.io API key (ships)"
+    default ""
+    depends on MUSE_RADAR_ENABLED
+    help
+        Ships come from aisstream.io, which is free but wants a key: sign in
+        with GitHub at https://aisstream.io/account and make one. Left empty,
+        the Ships mode says so on screen and fetches nothing. Planes and
+        weather need no key at all.
+
+endmenu

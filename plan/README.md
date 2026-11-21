@@ -15,6 +15,7 @@ after a week does not mean re-deriving it.
 | [radio.md](radio.md) | Internet radio and podcasts | working | on `main` |
 | [ui-watchdog.md](ui-watchdog.md) | Catching a frozen screen | working | on `main` |
 | [vm-config.md](vm-config.md) | Settings kept on the user's VM | blocked | `feat/vm-config` |
+| [radar.md](radar.md) | Radar page: planes, ships, weather | mockup only | `feat/radar` |
 
 ## Conventions
 

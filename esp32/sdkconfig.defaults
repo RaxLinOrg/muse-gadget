@@ -134,6 +134,13 @@ CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 
 CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
 CONFIG_ESP_TLS_USING_MBEDTLS=y
+# RFC 5077 session tickets. esp_http_client_open() always builds a fresh
+# connection -- keep-alive only helps esp_http_client_perform() -- so a client
+# that fetches several files from one host pays a full handshake each time,
+# measured at 3.5 s on this chip. With a ticket the second and later ones
+# resume instead, which is what makes the radar's four weather tiles
+# affordable. Needs save_client_session on the client config to take effect.
+CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS=y
 
 # Community v5 pairing uses ephemeral ECDH without a manufacturer credential.
 # Release overlays opt into deterministic eFuse ECDSA for official v5 pairing.
