@@ -22,8 +22,12 @@
 
 /* Between the component's own files; not for anyone else. */
 
-/* Weather: fetch the newest RainViewer frame into the rain layer. */
+/* Weather: fetch the newest RainViewer frame into the layer. */
 bool muse_radar_rain_fetch(void);
+
+/* Clouds: the newest clean-infrared frame from NASA GIBS, into the same
+ * layer, since only one picture is ever on screen. */
+bool muse_radar_cloud_fetch(void);
 
 /* How much of the scope has rain on it, in tenths of a percent, and the zoom
  * the picture was cut at. A picture landing is not the same as it having

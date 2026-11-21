@@ -570,6 +570,76 @@ absent in Ships.
   headroom. Tighter than it was and worth watching before the next sizeable
   feature.
 
+## A fourth mode: clouds
+
+The weather mode draws rain. Rain is the exception, not the weather — most of
+the time the scope is empty and the mode looks broken. So there is now a fourth
+mode, **clouds**, and the icon cycles planes → ships → weather → clouds.
+
+**RainViewer no longer has satellite imagery.** Its `satellite.infrared` field
+still appears in the API docs, but the endpoint returns an empty list: the
+feed was discontinued on 2026-01-01
+(*[transition FAQ](https://www.rainviewer.com/api/transition-faq.html)*). The
+replacement is **NASA GIBS**, whose WMTS REST layout is a drop-in for the tile
+fetcher already in `muse_radar_rain.c`:
+
+```
+https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/{layer}/default/default
+    /GoogleMapsCompatible_Level6/{z}/{row}/{col}.png
+```
+
+`default` in the time slot means the newest frame. The layer is picked by
+longitude, because each one is a different geostationary satellite:
+
+| Longitude | Layer |
+|---|---|
+| ≥ 40°E or ≤ 150°W | `Himawari_AHI_Band13_Clean_Infrared` |
+| ≤ 100°W | `GOES-West_ABI_Band13_Clean_Infrared` |
+| otherwise | `GOES-East_ABI_Band13_Clean_Infrared` |
+
+Two things about these tiles caught the code out:
+
+- **They are photographs, not sparse overlays.** A single z=5 tile over New
+  York is 96,871 bytes, where the rain tiles were a few KB. `PNG_MAX` had to go
+  from 64 KB to 192 KB; below that libpng reported "read beyond end of data" on
+  three tiles in four.
+- **There is no fixed threshold for "cloud".** Clean infrared is a *brightness
+  temperature* picture, so the clear-sky baseline moves with the ground
+  underneath it. Measured inside the scope, the median pixel is 0.38 over
+  Panama, 0.42 over the Taiwan Strait and 0.53 over both the Bay Area and New
+  York. A floor of 0.38 painted the entire scope (exactly 167,601 px — the
+  scope's whole area); a floor of 0.62 painted nothing almost everywhere.
+
+So the floor is **relative**: the tiles are blitted as raw brightness into a
+scratch buffer, a 256-bin histogram finds the median of the pixels actually in
+scope, and the cloud floor is `median + 0.10`. That number was found by
+replicating the firmware's reprojection in a host script and histogramming real
+tiles, rather than by guessing on hardware — and the board's own medians then
+came back within 0.03 of the host's at every place tried, which cross-checks the
+projection maths as a side effect.
+
+Measured on the board:
+
+| Place | Range | Painted |
+|---|---|---|
+| Japan | 250 NM | 53,855 of 160,921 px (33%) |
+| Taiwan Strait | 250 NM | 41,764 of 142,914 px (29%) |
+| Bay Area | 250 NM | 21,648 of 149,084 px (14.5%) |
+| Panama | 40 NM | 2,749 of 167,601 px (1.6%) |
+| Taiwan Strait | 40 NM | 0 px — genuinely clear |
+
+![Clouds over Japan at 250 NM](assets/radar-dev-clouds-japan.png)
+
+A real frontal band and a cloud street, with the coastline visible through the
+gaps. The card names the source rather than pretending to a forecast:
+
+![The clouds card](assets/radar-dev-clouds-card.png)
+
+**Known gap: the Indian Ocean.** GIBS carries no Meteosat, so there is a wedge
+between the Himawari and GOES discs with no imagery at all. Hormuz (56.25°E)
+sits on Himawari's western limb and returns nothing at z=6. The card says
+`NO CLOUD DATA HERE` rather than claiming clear sky.
+
 ## Open questions
 
 - ~~Does cJSON survive a 615 KB body on this board?~~ Settled by not asking it
@@ -599,6 +669,7 @@ absent in Ships.
 - Data: [adsb.lol](https://api.adsb.lol/v2/point/), [adsb.fi](https://opendata.adsb.fi/),
   [aisstream.io](https://aisstream.io/documentation),
   [RainViewer](https://www.rainviewer.com/api.html),
+  [NASA GIBS](https://nasa-gibs.github.io/gibs-api-docs/),
   [Open-Meteo](https://api.open-meteo.com/v1/forecast),
   [Natural Earth coastline](https://github.com/nvkelso/natural-earth-vector)
 - Prior art: [Alex-developer/ADSB-Radar](https://github.com/Alex-developer/ADSB-Radar)

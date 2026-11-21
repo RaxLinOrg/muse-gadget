@@ -48,13 +48,20 @@ static const char *TAG = "radar.rain";
  */
 #define TILE_PX   256
 #define ZOOM_MAX  7
+#define CLOUD_ZOOM_MAX 6
 #define ZOOM_MIN  2
-#define PNG_MAX   (64 * 1024)
+/*
+ * A rain tile is mostly empty and compresses to a few KB. An infrared tile is
+ * a photograph of the whole sky and does not: New York at z=5 is 97 KB, and
+ * at 64 KB it arrived truncated and libpng said "read beyond end of data".
+ */
+#define PNG_MAX   (192 * 1024)
 #define HTTP_TIMEOUT_MS 10000
 
 #define PX  MUSE_RADAR_TILE_PX
 
 static uint16_t *s_rain;        /* PX*PX RGB565, 0 where it is dry */
+static uint8_t  *s_grey;        /* clouds only: raw infrared, 0 = no data */
 static bool s_fresh;
 static int s_wet;               /* scope pixels with rain in them */
 static int s_zoom;              /* the zoom the current picture was cut at */
@@ -212,6 +219,73 @@ static uint16_t ramp(float s)
     return 0;
 }
 
+/*
+ * Clouds are a different quantity and get a different palette. GIBS serves
+ * clean infrared as greyscale, where white is cold -- which is to say high
+ * cloud top -- and dark is warm ground. Everything below CLOUD_FLOOR is
+ * treated as clear sky and left transparent, so the coastline still shows
+ * through; what is left is ramped cool, so a glance never mistakes cloud for
+ * rain on the same green scope.
+ */
+/*
+ * Cloud is whatever is colder than the ground under it, and no fixed
+ * greyscale value says where that is. Clean infrared is a brightness
+ * temperature picture, so the clear-sky baseline moves with the local
+ * surface: measured inside the scope, the median pixel is 0.36 over Panama,
+ * 0.42 over the Taiwan Strait and 0.53 over New York. A single cut-off is
+ * therefore wrong twice over -- 0.38 lit the entire scope at every place
+ * (167,601 of 167,650 pixels, a solid wash with the coastline buried), and
+ * 0.62 lit almost nothing anywhere (0 px at three places out of four).
+ *
+ * So the floor is found per picture: the median of the pixels actually inside
+ * the scope, plus a margin. What is left is the cold tail, which is the
+ * cloud. Over the Bay Area at 40 NM that correctly comes to nearly nothing --
+ * the scope's whole brightness range was 0.42 to 0.57 -- while the same place
+ * at 250 NM reaches 0.77 and shows real cloud.
+ */
+#define CLOUD_MARGIN  0.10f
+
+static uint16_t cloud_ramp(float s)
+{
+    static const float stop[] = { 0.00f, 0.35f, 0.70f, 1.00f };
+    static const uint8_t col[][3] = {
+        { 28, 58, 78 }, { 86, 118, 148 }, { 168, 194, 214 }, { 245, 250, 255 },
+    };
+    if (s < 0.0f) {
+        s = 0.0f;
+    }
+    if (s > 1.0f) {
+        s = 1.0f;
+    }
+    for (int i = 0; i < 3; i++) {
+        if (s <= stop[i + 1]) {
+            float f = (s - stop[i]) / (stop[i + 1] - stop[i]);
+            int r = (int)(col[i][0] + f * (col[i + 1][0] - col[i][0]));
+            int g = (int)(col[i][1] + f * (col[i + 1][1] - col[i][1]));
+            int b = (int)(col[i][2] + f * (col[i + 1][2] - col[i][2]));
+            return (uint16_t)(((r & 0xf8) << 8) | ((g & 0xfc) << 3) | (b >> 3));
+        }
+    }
+    return 0;
+}
+
+/*
+ * Which geostationary satellite can see a place. GIBS carries three clean-IR
+ * discs and no Meteosat, so the Indian Ocean falls between them: Hormuz sits
+ * on Himawari's western limb and usually comes back empty, which the page
+ * says rather than pretending the sky is clear.
+ */
+static const char *cloud_layer(double lon)
+{
+    if (lon >= 40.0 || lon <= -150.0) {
+        return "Himawari_AHI_Band13_Clean_Infrared";
+    }
+    if (lon <= -100.0) {
+        return "GOES-West_ABI_Band13_Clean_Infrared";
+    }
+    return "GOES-East_ABI_Band13_Clean_Infrared";
+}
+
 /* --------------------------------------------------- tiles and projection */
 
 static double merc_y(double lat_deg)
@@ -236,7 +310,7 @@ static int pick_zoom(double lat, int range_nm)
 
 /* Decode one tile and drop whatever of it lands inside the scope. */
 static bool blit_tile(const uint8_t *png, size_t len, int tx, int ty, int z,
-                      double lat0, double lon0, int range_nm)
+                      double lat0, double lon0, int range_nm, bool clouds)
 {
     png_image img;
     memset(&img, 0, sizeof(img));
@@ -286,6 +360,14 @@ static bool blit_tile(const uint8_t *png, size_t len, int tx, int ty, int z,
             if (a < 30) {
                 continue;
             }
+            if (clouds) {
+                /* Greyscale: one channel is the whole signal. Keep it raw;
+                 * the floor cannot be known until every tile has landed. */
+                if (s_grey) {
+                    s_grey[y * PX + x] = (uint8_t)(q[0] < 255 ? q[0] + 1 : 255);
+                }
+                continue;
+            }
             int mx = q[0] > q[1] ? (q[0] > q[2] ? q[0] : q[2]) : (q[1] > q[2] ? q[1] : q[2]);
             int mn = q[0] < q[1] ? (q[0] < q[2] ? q[0] : q[2]) : (q[1] < q[2] ? q[1] : q[2]);
             float light = mx / 255.0f;
@@ -303,7 +385,20 @@ static bool blit_tile(const uint8_t *png, size_t len, int tx, int ty, int z,
     return true;
 }
 
-bool muse_radar_rain_fetch(void)
+/*
+ * One fetch for both pictures. The difference is where the tiles come from
+ * and how their pixels are read:
+ *
+ *   rain   -- RainViewer, whose index has to be fetched first for the newest
+ *             frame's path, max zoom 7.
+ *   clouds -- NASA GIBS clean infrared, where "default" as the time means the
+ *             newest frame, so there is no index call at all. The tile matrix
+ *             set tops out at zoom 6, and the path puts row before column.
+ *
+ * RainViewer discontinued its own satellite layer on 2026-01-01, which is why
+ * clouds come from somewhere else entirely.
+ */
+static bool fetch_layer(bool clouds)
 {
     if (!s_rain) {
         s_rain = heap_caps_calloc((size_t)PX * PX, 2, MALLOC_CAP_SPIRAM);
@@ -313,7 +408,7 @@ bool muse_radar_rain_fetch(void)
         }
     }
     char path[64];
-    if (!latest_path(path, sizeof(path))) {
+    if (!clouds && !latest_path(path, sizeof(path))) {
         ESP_LOGW(TAG, "no frame index");
         return false;
     }
@@ -323,6 +418,9 @@ bool muse_radar_rain_fetch(void)
         return false;
     }
     int z = pick_zoom(p->lat, range);
+    if (clouds && z > CLOUD_ZOOM_MAX) {
+        z = CLOUD_ZOOM_MAX;     /* GoogleMapsCompatible_Level6 stops here */
+    }
     double n = pow(2.0, z);
     double fx = ((double)p->lon + 180.0) / 360.0 * n;
     double fy = merc_y(p->lat) * n;
@@ -338,6 +436,16 @@ bool muse_radar_rain_fetch(void)
     memset(s_rain, 0, (size_t)PX * PX * 2);
     s_wet = 0;
     s_zoom = z;
+    if (clouds) {
+        /* Freed before this call returns; 217 KB of PSRAM for the time it
+         * takes to decide where the cloud starts. */
+        s_grey = heap_caps_calloc((size_t)PX * PX, 1, MALLOC_CAP_SPIRAM);
+        if (!s_grey) {
+            ESP_LOGE(TAG, "no room for the infrared scratch");
+            free(png);
+            return false;
+        }
+    }
     int wrap = (int)n;
     int ok = 0;
     for (int j = 0; j < 2; j++) {
@@ -347,10 +455,17 @@ bool muse_radar_rain_fetch(void)
             if (ty < 0 || ty >= wrap) {
                 continue;
             }
-            char url[160];
-            snprintf(url, sizeof(url),
-                     "https://tilecache.rainviewer.com%s/%d/%d/%d/%d/4/1_1.png",
-                     path, TILE_PX, z, tx, ty);
+            char url[256];
+            if (clouds) {
+                snprintf(url, sizeof(url),
+                         "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/%s"
+                         "/default/default/GoogleMapsCompatible_Level6/%d/%d/%d.png",
+                         cloud_layer(p->lon), z, ty, tx);
+            } else {
+                snprintf(url, sizeof(url),
+                         "https://tilecache.rainviewer.com%s/%d/%d/%d/%d/4/1_1.png",
+                         path, TILE_PX, z, tx, ty);
+            }
             int len = get(url, png, PNG_MAX);
             /*
              * An empty tile is a few hundred bytes and decodes to nothing,
@@ -358,14 +473,64 @@ bool muse_radar_rain_fetch(void)
              * worth counting against us.
              */
             if (len > 0 && blit_tile(png, (size_t)len, tx, ty, z,
-                                     p->lat, p->lon, range)) {
+                                     p->lat, p->lon, range, clouds)) {
                 ok++;
             }
         }
     }
     free(png);
+    if (clouds && s_grey) {
+        /* The floor is the median of what is actually on the scope, plus a
+         * margin; everything above it is the cold tail. */
+        int hist[256] = { 0 }, seen = 0;
+        for (int i = 0; i < PX * PX; i++) {
+            if (s_grey[i]) {
+                hist[s_grey[i] - 1]++;
+                seen++;
+            }
+        }
+        int med = 0;
+        for (int i = 0, run = 0; i < 256; i++) {
+            run += hist[i];
+            if (run * 2 >= seen) {
+                med = i;
+                break;
+            }
+        }
+        float floor_v = med / 255.0f + CLOUD_MARGIN;
+        if (floor_v > 0.92f) {
+            floor_v = 0.92f;
+        }
+        float span = 1.0f - floor_v;
+        for (int i = 0; i < PX * PX; i++) {
+            if (!s_grey[i]) {
+                continue;
+            }
+            float b = (s_grey[i] - 1) / 255.0f;
+            if (b <= floor_v) {
+                continue;
+            }
+            s_rain[i] = cloud_ramp((b - floor_v) / span);
+            s_wet++;
+        }
+        ESP_LOGI(TAG, "%s clouds: median %.2f, floor %.2f, %d of %d px",
+                 p->name, (double)(med / 255.0f), (double)floor_v, s_wet, seen);
+        heap_caps_free(s_grey);
+        s_grey = NULL;
+    }
     s_fresh = ok > 0;
-    ESP_LOGI(TAG, "%s: z=%d, %d of 4 tiles, %d wet px, stack left %u",
-             p->name, z, ok, s_wet, (unsigned)uxTaskGetStackHighWaterMark(NULL));
+    ESP_LOGI(TAG, "%s %s: z=%d, %d of 4 tiles, %d px, stack left %u",
+             p->name, clouds ? "clouds" : "rain", z, ok, s_wet,
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
     return s_fresh;
+}
+
+bool muse_radar_rain_fetch(void)
+{
+    return fetch_layer(false);
+}
+
+bool muse_radar_cloud_fetch(void)
+{
+    return fetch_layer(true);
 }

@@ -51,6 +51,7 @@ static const char *TAG = "radar";
 #define C_HIGH   rgb(31, 160, 100)
 #define C_SEL    rgb(255, 255, 255)
 #define C_SHIP   rgb(120, 205, 255)
+#define C_CLOUD  rgb(188, 208, 226)
 
 #define TEXT_DIM  0x0d6b43
 #define TEXT_MID  0x1fd47a
@@ -271,6 +272,13 @@ static void draw_mode_icon(void)
                  cx + KI(i * 6 - 3), cy + KI(10), C_LOW);
         }
         break;
+    case MUSE_RADAR_CLOUDS:
+        /* The same cloud with nothing falling out of it, in the layer's own
+         * cool grey, so the two weather modes cannot be confused at a glance. */
+        disc(cx - KI(7), cy + KI(1), KI(6), C_CLOUD);
+        disc(cx + KI(1), cy - KI(3), KI(8), C_CLOUD);
+        disc(cx + KI(9), cy + KI(1), KI(6), C_CLOUD);
+        break;
     case MUSE_RADAR_PLANES:
     default:
         draw_blip(x, y, 0.0f, 12.0f * k, C_MID);
@@ -290,7 +298,7 @@ static void draw_scope(const muse_radar_sweep_t *s)
     memset(s_px, 0, (size_t)PX * PX * 2);
     disc(CTR, CTR, RAD, C_BG);
 
-    if (muse_radar_mode() == MUSE_RADAR_WEATHER) {
+    if (muse_radar_mode_is_layer(muse_radar_mode())) {
         const uint16_t *rain = muse_radar_rain();
         if (rain) {
             for (int y = 0; y < PX; y++) {
@@ -567,27 +575,35 @@ static void fill_popup(const muse_radar_sweep_t *s)
         lv_label_set_text(s_pop_d, "");
         return;
     }
-    if (muse_radar_mode() == MUSE_RADAR_WEATHER) {
-        /* A picture landing and a picture having rain in it are different
+    if (muse_radar_mode_is_layer(muse_radar_mode())) {
+        /* A picture landing and a picture having anything in it are different
          * questions. Dry sky over the whole state used to read "RAIN". */
+        bool clouds = muse_radar_mode() == MUSE_RADAR_CLOUDS;
+        const char *what = clouds ? "CLOUD" : "RAIN";
         int pm = muse_radar_rain_permille();
         if (!muse_radar_rain_fresh()) {
             lv_label_set_text(s_pop_b, "NO PICTURE YET");
-            lv_label_set_text(s_pop_c, "RainViewer");
+            lv_label_set_text(s_pop_c, clouds ? "NASA GIBS" : "RainViewer");
             lv_label_set_text(s_pop_d, "");
             return;
         }
         if (pm == 0) {
-            lv_label_set_text(s_pop_b, "NO RAIN IN RANGE");
+            /* For clouds this is as likely to mean "no satellite sees this
+             * place" as "clear sky", and the page should not pick one. */
+            lv_label_set_text(s_pop_b, clouds ? "NO CLOUD DATA HERE"
+                                              : "NO RAIN IN RANGE");
         } else if (pm < 10) {
-            lv_label_set_text(s_pop_b, "RAIN  UNDER 1%");
+            snprintf(buf, sizeof(buf), "%s  UNDER 1%%", what);
+            lv_label_set_text(s_pop_b, buf);
         } else {
-            snprintf(buf, sizeof(buf), "RAIN  %d%% OF SCOPE", (pm + 5) / 10);
+            snprintf(buf, sizeof(buf), "%s  %d%% OF SCOPE", what, (pm + 5) / 10);
             lv_label_set_text(s_pop_b, buf);
         }
-        snprintf(buf, sizeof(buf), "RainViewer  z=%d", muse_radar_rain_zoom());
+        snprintf(buf, sizeof(buf), "%s  z=%d", clouds ? "NASA GIBS" : "RainViewer",
+                 muse_radar_rain_zoom());
         lv_label_set_text(s_pop_c, buf);
-        lv_label_set_text(s_pop_d, "PRECIPITATION ONLY");
+        lv_label_set_text(s_pop_d, clouds ? "GEOSTATIONARY INFRARED"
+                                          : "PRECIPITATION ONLY");
         return;
     }
     if (muse_radar_mode() == MUSE_RADAR_SHIPS) {
@@ -659,7 +675,7 @@ static void tick(bool visible)
      * card says what the nearest one is anyway; ship names are worth the
      * space because there are few of them and a name is the whole point. */
     bool tagged = muse_radar_mode() == MUSE_RADAR_SHIPS;
-    bool weather = muse_radar_mode() == MUSE_RADAR_WEATHER;
+    bool weather = muse_radar_mode_is_layer(muse_radar_mode());
     if (s.at != s_drawn_at || s.n != s_drawn_n || weather) {
         draw_scope(&s);
         if (tagged) {
@@ -831,6 +847,8 @@ static bool bench(const char *arg)
         muse_radar_set_mode(MUSE_RADAR_SHIPS);
     } else if (!strcmp(arg, "weather")) {
         muse_radar_set_mode(MUSE_RADAR_WEATHER);
+    } else if (!strcmp(arg, "clouds")) {
+        muse_radar_set_mode(MUSE_RADAR_CLOUDS);
     } else if (!strcmp(arg, "off")) {
         muse_radar_set_range_index(MUSE_RADAR_OFF);
     } else if (!strncmp(arg, "place=", 6)) {
