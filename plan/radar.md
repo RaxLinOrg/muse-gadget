@@ -1,7 +1,6 @@
 # Radar
 
-**Status:** planes and weather run on the board; ships unblocked by a forked
-websocket client, not yet confirmed on hardware
+**Status:** all three modes run on the board
 **Branch:** `feat/radar`
 **Last updated:** 2026-11-20
 
@@ -18,9 +17,12 @@ out of the swipe list entirely.
 Flashed to the 1.75C and snapshotted over the serial console on 2026-11-20.
 These are the real screens; the mockups that led to them are below.
 
-| Planes | The info card | Weather | Ships, no link |
+| Planes | The info card | Weather | Ships |
 |---|---|---|---|
-| ![](assets/radar-dev-planes.png) | ![](assets/radar-dev-info.png) | ![](assets/radar-dev-weather.png) | ![](assets/radar-dev-ships.png) |
+| ![](assets/radar-dev-planes.png) | ![](assets/radar-dev-info.png) | ![](assets/radar-dev-weather.png) | ![](assets/radar-dev-ships-linked.png) |
+
+The Ships shot is after the websocket fork below; `assets/radar-dev-ships.png`
+is the same page before it, saying `NO AIS LINK / no internal RAM`.
 
 The scope is the page: no title, no permanent caption, no card. It fills the
 466 px round display edge to edge. What the captions used to say is behind the
@@ -43,10 +45,11 @@ Measured while they ran:
 - **Full screen costs 434 KB of PSRAM per layer.** Free PSRAM goes from
   1,961 KB to 1,426 KB when weather allocates its rain layer beside the
   scope — *(how: the link heartbeat either side of a mode change)*
-- **Ships do not link on this firmware.** See below; the key is not the
-  problem.
+- **Ships link, but only via a forked websocket client.** The stack had to
+  move to PSRAM; see "Ships were blocked on internal RAM" and the fork below
+  for why, and why the key was never the problem.
 
-### Ships are blocked on internal RAM, not on the key
+### Ships were blocked on internal RAM, not on the key
 
 With a valid key in place the websocket never opens. The reason is specific
 and measured:
@@ -101,9 +104,8 @@ What would actually unblock it, in rough order of effort:
    below.
 3. Drop ships.
 
-Until the fork is confirmed on the board the page says
-`NO AIS LINK / no internal RAM` rather than looking for contacts that cannot
-arrive.
+The fork is confirmed on the board: `radar.ais: subscribed to Bay Area,
+40 nm`, and real contacts on the scope.
 
 ### The fork that unblocks it
 
@@ -136,6 +138,21 @@ it; radar never takes that path.
 Costs worth knowing: carrying the fork across IDF updates (re-copy upstream,
 re-apply the `muse fork` blocks), and 8 KB of PSRAM held for the lifetime of
 the firmware once Ships has run.
+
+**On the board.** The stream opens, and the measurement that mattered is that
+it opens *without* internal RAM having got any better: largest free internal
+block at the moment Ships asks is still **3,968 bytes**, the same number that
+used to turn it away. The stack is simply somewhere else now.
+
+![Ships, linked](assets/radar-dev-ships-linked.png)
+
+The teardown was then exercised directly, since slot reuse is the part of the
+fork that could corrupt something rather than merely fail: five switches
+away to Planes and back to Ships. Four re-subscribed inside the watch window
+and the fifth inside the retry backoff; no panic, no assert, no heap
+complaint. Largest free internal block held at 3,968 across all five and PSRAM
+held at 1,441,792, so neither the slot nor the client leaks per cycle —
+*(how: `>page=radar:planes` / `:ships` / `:mem` over five cycles)*.
 
 Driving it from the bench: `>page=radar:planes` / `:ships` / `:weather`,
 `>page=radar:12` / `:40` / `:250` / `:off`, `>page=radar:place=3`,
@@ -443,10 +460,9 @@ absent in Ships.
 ## Blockers
 
 - Planes and weather: none, both run on the board.
-- Ships: the internal-RAM block is addressed by the forked
-  `esp_websocket_client` (see "The fork that unblocks it"), but the fix has
-  **not yet been seen working on hardware** — the build is done and the flash
-  is outstanding.
+- Ships: none. The forked `esp_websocket_client` (see "The fork that
+  unblocks it") opens the stream on the board, and five teardown cycles left
+  nothing leaking.
 - The app binary is now **3.82 MB in a 4 MB `ota_0` slot**, ~190 KB of
   headroom. Tighter than it was and worth watching before the next sizeable
   feature.
