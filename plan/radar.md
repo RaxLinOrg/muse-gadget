@@ -156,10 +156,68 @@ held at 1,441,792, so neither the slot nor the client leaks per cycle —
 
 Driving it from the bench: `>page=radar:planes` / `:ships` / `:weather`,
 `>page=radar:12` / `:40` / `:250` / `:off`, `>page=radar:place=3`,
-`>page=radar:info` to raise the card since the console cannot tap, and
+`>page=radar:info` to raise the card since the console cannot tap,
+`>page=radar:tap=mode` / `:tap=nm` / `:tap=city` for the three on-scope taps
+for the same reason, and
 `>page=radar:mem` for free and largest-block internal and PSRAM at that
 instant — the largest block is what a task stack needs, and on this board it
 is the number that decides things.
+
+## Driving it from the scope
+
+Everything the page can be set to is now reachable without leaving it, because
+the settings page is four swipes and a scroll away from a screen whose whole
+point is being glanced at.
+
+| Planes at 250 NM | The card | Weather at 250 NM | Ships |
+|---|---|---|---|
+| ![](assets/radar-dev-planes-250.png) | ![](assets/radar-dev-card.png) | ![](assets/radar-dev-weather-250.png) | ![](assets/radar-dev-ships-card.png) |
+
+- **The mode glyph is a button.** Tapping it walks planes → ships → weather and
+  round again. The glyph is rasterised into the scope image and cannot take a
+  tap itself, so a 44 px transparent box sits over it and does.
+- **The card's first line is two buttons.** The range on the left, the place on
+  the right, each cycling to the next value and each holding the card up for
+  another five seconds so a place can be walked through without it vanishing
+  mid-tap. The range cycles 12 / 40 / 250 only: **Off** stays a settings-page
+  decision, because choosing it from the scope would delete the page out from
+  under the finger that chose it.
+- **Any change clears the scope.** A range change used to keep the old sweep
+  and merely ask for a new one, which left every blip at the wrong radius until
+  the fetch landed. Mode, range and place all reset now, and the reset drops
+  the rain picture too, since it was projected for one place at one zoom and a
+  setting change invalidates both.
+
+### What the card says now
+
+Only ships are labelled on the scope. Eighty aircraft three tags at a time was
+noise over the thing the tags were meant to annotate; ship names stay because
+there are few of them and the name is the whole point. That makes the card the
+only place a plane is named, so it carries the nearest contact, its altitude or
+speed, how far away it is, and how many of what is out there fit on the scope —
+`80/421` is the cap doing its job, not a failed fetch.
+
+Weather answers a question it used to dodge. `s_fresh` meant "a picture
+landed", and the card read that as "RAIN", so dry sky over the whole state
+still said it was raining. Wet pixels are counted during the blit now, and the
+card says `NO RAIN IN RANGE`, `RAIN UNDER 1%` or `RAIN n% OF SCOPE`, with the
+zoom the picture was cut at.
+
+The card had to grow from 250 px to 360 to do this. At 250 the two halves of
+the first line overprinted each other — `250LNM Angeles` — and both lines under
+it ran off both edges:
+
+![The 250 px card](assets/radar-dev-card-250wide.png)
+
+### Rings, not the nearest eighty
+
+The 80-target cap kept the nearest 80, which looked right at 12 NM and wrong at
+250: a busy place has 80 aircraft within 30 miles, so the cap filled long before
+the edge and the outer two thirds of the scope was always empty. The scope is
+divided into four range rings now, each holding a share of the cap and lending
+what it does not use to the others; within a ring the near ones still win. Los
+Angeles at 250 NM keeps 80 of 421 and spreads them to the edge — *(how: the
+screenshot above, and the page's own log line)*.
 
 ## The AIS key, and where it lives
 

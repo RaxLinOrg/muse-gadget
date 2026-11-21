@@ -58,7 +58,8 @@ static const char *TAG = "radar";
 
 static uint16_t *s_px;
 static lv_image_dsc_t s_dsc;
-static lv_obj_t *s_img, *s_info, *s_pop, *s_pop_a, *s_pop_b, *s_pop_c;
+static lv_obj_t *s_img, *s_info, *s_mode_hit;
+static lv_obj_t *s_pop, *s_pop_nm, *s_pop_city, *s_pop_b, *s_pop_c;
 static lv_obj_t *s_tag[3];
 static uint32_t s_drawn_at = UINT32_MAX;
 static int s_drawn_n = -1;
@@ -73,6 +74,11 @@ static volatile bool s_pop_show;/* bench() asked for it; tick() raises it */
 #define INFO_D    (RAD - INFO_PX / 2 - 4)
 #define INFO_X    ((int)(0.5f + sqrtf((float)(INFO_D * INFO_D - INFO_Y * INFO_Y))))
 #define POP_MS    5000
+
+/* The mode glyph is rasterised into the scope image, so it cannot take a tap
+ * on its own. This invisible box sits over it and does. */
+#define MODE_Y    (INFO_Y + INFO_PX + 6)
+#define MODE_HIT  44
 
 static inline uint16_t rgb(int r, int g, int b)
 {
@@ -353,6 +359,43 @@ static void on_info_clicked(lv_event_t *e)
     lv_obj_clear_flag(s_pop, LV_OBJ_FLAG_HIDDEN);
 }
 
+/* Tapping the mode glyph walks planes -> ships -> weather and round again,
+ * which saves a trip to the settings page for the one setting people change
+ * while they are looking at the scope. */
+static void on_mode_clicked(lv_event_t *e)
+{
+    (void)e;
+    muse_radar_set_mode((muse_radar_mode() + 1) % MUSE_RADAR_MODE_COUNT);
+    s_drawn_at = UINT32_MAX;        /* redraw the glyph on the next tick */
+}
+
+/*
+ * The card's first line is two separate taps: the range and the place. Range
+ * cycles 12 / 40 / 250 only -- Off is a settings-page decision, because
+ * choosing it from the scope would delete the page out from under the finger
+ * that chose it. Each tap also holds the card up for another five seconds, so
+ * a place can be walked through without it vanishing mid-tap.
+ */
+static void hold_popup(void)
+{
+    s_pop_until = lv_tick_get() + POP_MS;
+}
+
+static void on_pop_nm_clicked(lv_event_t *e)
+{
+    (void)e;
+    int i = muse_radar_range_index();
+    muse_radar_set_range_index(i >= MUSE_RADAR_RANGE_COUNT - 1 ? 0 : i + 1);
+    hold_popup();
+}
+
+static void on_pop_city_clicked(lv_event_t *e)
+{
+    (void)e;
+    muse_radar_set_place((muse_radar_place() + 1) % MUSE_RADAR_PLACE_COUNT);
+    hold_popup();
+}
+
 static void build(lv_obj_t *tile)
 {
     lv_obj_set_style_bg_color(tile, lv_color_black(), 0);
@@ -392,9 +435,21 @@ static void build(lv_obj_t *tile)
     lv_obj_set_ext_click_area(s_info, 12);
     lv_obj_add_event_cb(s_info, on_info_clicked, LV_EVENT_CLICKED, NULL);
 
+    s_mode_hit = lv_obj_create(tile);
+    lv_obj_remove_style_all(s_mode_hit);
+    lv_obj_set_size(s_mode_hit, MODE_HIT, MODE_HIT);
+    lv_obj_align(s_mode_hit, LV_ALIGN_CENTER, INFO_X, MODE_Y);
+    lv_obj_clear_flag(s_mode_hit, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_mode_hit, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_mode_hit, on_mode_clicked, LV_EVENT_CLICKED, NULL);
+
     s_pop = lv_obj_create(tile);
     lv_obj_remove_style_all(s_pop);
-    lv_obj_set_size(s_pop, 250, 86);
+    /* 250 px held one centred line. The first line is now two taps that must
+      * not touch, and the caption font runs about 17 px a character, so the
+      * widest pair ("250 NM" and "Taiwan Strait") needs 332 px between the
+      * margins. */
+    lv_obj_set_size(s_pop, 360, 92);
     lv_obj_align(s_pop, LV_ALIGN_CENTER, 0, -44);
     lv_obj_set_style_bg_color(s_pop, lv_color_hex(0x06180f), 0);
     lv_obj_set_style_bg_opa(s_pop, LV_OPA_COVER, 0);
@@ -403,7 +458,18 @@ static void build(lv_obj_t *tile)
     lv_obj_set_style_border_color(s_pop, lv_color_hex(0x135c3c), 0);
     lv_obj_clear_flag(s_pop, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_pop, LV_OBJ_FLAG_HIDDEN);
-    s_pop_a = label(s_pop, cap, TEXT_MID, LV_ALIGN_TOP_MID, 0, 6);
+    /* Two taps, not one label: the range on the left, the place on the right,
+     * both lit brighter than the lines under them to look touchable. */
+    s_pop_nm = label(s_pop, cap, TEXT_LIT, LV_ALIGN_TOP_LEFT, 14, 6);
+    lv_obj_add_flag(s_pop_nm, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(s_pop_nm, 10);
+    lv_obj_add_event_cb(s_pop_nm, on_pop_nm_clicked, LV_EVENT_CLICKED, NULL);
+
+    s_pop_city = label(s_pop, cap, TEXT_LIT, LV_ALIGN_TOP_RIGHT, -14, 6);
+    lv_obj_add_flag(s_pop_city, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(s_pop_city, 10);
+    lv_obj_add_event_cb(s_pop_city, on_pop_city_clicked, LV_EVENT_CLICKED, NULL);
+
     s_pop_b = label(s_pop, cap, 0xeaffe9, LV_ALIGN_TOP_MID, 0, 30);
     s_pop_c = label(s_pop, cap, TEXT_DIM, LV_ALIGN_TOP_MID, 0, 54);
 
@@ -462,9 +528,9 @@ static void place_tags(const muse_radar_sweep_t *s, float range)
 static void fill_popup(const muse_radar_sweep_t *s)
 {
     char buf[48];
-    snprintf(buf, sizeof(buf), "%d NM  %s", muse_radar_range_nm(),
-             muse_radar_place_at()->name);
-    lv_label_set_text(s_pop_a, buf);
+    snprintf(buf, sizeof(buf), "%d NM", muse_radar_range_nm());
+    lv_label_set_text(s_pop_nm, buf);
+    lv_label_set_text(s_pop_city, muse_radar_place_at()->name);
 
     if (!muse_wifi_connected()) {
         lv_label_set_text(s_pop_b, "NO WI-FI");
@@ -472,8 +538,24 @@ static void fill_popup(const muse_radar_sweep_t *s)
         return;
     }
     if (muse_radar_mode() == MUSE_RADAR_WEATHER) {
-        lv_label_set_text(s_pop_b, muse_radar_rain() ? "RAIN" : "NO PICTURE YET");
-        lv_label_set_text(s_pop_c, "RainViewer");
+        /* A picture landing and a picture having rain in it are different
+         * questions. Dry sky over the whole state used to read "RAIN". */
+        int pm = muse_radar_rain_permille();
+        if (!muse_radar_rain_fresh()) {
+            lv_label_set_text(s_pop_b, "NO PICTURE YET");
+            lv_label_set_text(s_pop_c, "RainViewer");
+            return;
+        }
+        if (pm == 0) {
+            lv_label_set_text(s_pop_b, "NO RAIN IN RANGE");
+        } else if (pm < 10) {
+            lv_label_set_text(s_pop_b, "RAIN  UNDER 1%");
+        } else {
+            snprintf(buf, sizeof(buf), "RAIN  %d%% OF SCOPE", (pm + 5) / 10);
+            lv_label_set_text(s_pop_b, buf);
+        }
+        snprintf(buf, sizeof(buf), "RainViewer  z=%d", muse_radar_rain_zoom());
+        lv_label_set_text(s_pop_c, buf);
         return;
     }
     if (muse_radar_mode() == MUSE_RADAR_SHIPS) {
@@ -493,18 +575,26 @@ static void fill_popup(const muse_radar_sweep_t *s)
         lv_label_set_text(s_pop_c, "");
         return;
     }
+    /* The nearest contact, then how many there are. With the plane tags gone
+     * from the scope this card is the only place either is written down, so
+     * it says both rather than two shades of the same one. */
     const muse_radar_target_t *t = &s->t[0];
     if (muse_radar_mode() == MUSE_RADAR_SHIPS) {
-        snprintf(buf, sizeof(buf), "%s  %.1f kn",
+        snprintf(buf, sizeof(buf), "%s  %.0f kn",
                  t->id[0] ? t->id : "-", (double)t->speed);
     } else {
         snprintf(buf, sizeof(buf), "%s  %ld ft",
                  t->id[0] ? t->id : "-", (long)t->alt);
     }
     lv_label_set_text(s_pop_b, buf);
-    snprintf(buf, sizeof(buf), "%s%s%.0fkt %.1fnm",
-             t->type[0] ? t->type : "", t->type[0] ? "  " : "",
-             (double)t->speed, (double)t->dst);
+    /* How far the nearest one is, then how much of what is out there fits on
+     * the scope: "80/419" is the cap doing its job, not a dropped fetch. */
+    if (s->total > s->n) {
+        snprintf(buf, sizeof(buf), "%.1f NM  %d/%d",
+                 (double)t->dst, s->n, s->total);
+    } else {
+        snprintf(buf, sizeof(buf), "%.1f NM  %d", (double)t->dst, s->n);
+    }
     lv_label_set_text(s_pop_c, buf);
 }
 
@@ -516,10 +606,15 @@ static void tick(bool visible)
     }
     muse_radar_sweep_t s;
     muse_radar_get(&s);
+    /* Only ships are labelled on the scope. Eighty aircraft three tags at a
+     * time was noise over the thing the tags were meant to annotate, and the
+     * card says what the nearest one is anyway; ship names are worth the
+     * space because there are few of them and a name is the whole point. */
+    bool tagged = muse_radar_mode() == MUSE_RADAR_SHIPS;
     bool weather = muse_radar_mode() == MUSE_RADAR_WEATHER;
     if (s.at != s_drawn_at || s.n != s_drawn_n || weather) {
         draw_scope(&s);
-        if (!weather) {
+        if (tagged) {
             place_tags(&s, (float)muse_radar_range_nm());
         } else {
             for (int i = 0; i < 3; i++) {
@@ -640,7 +735,7 @@ static void settings_value(char *out, size_t cap)
 
 /*
  * ">page=radar:weather", ":ships", ":planes", ":12" / ":40" / ":250" / ":off",
- * ":place=3" — the settings rows need a finger, and a board on a bench has
+ * ":place=3", ":tap=mode" / ":tap=nm" / ":tap=city" (the on-scope taps) — the settings rows need a finger, and a board on a bench has
  * none. Runs on the console task; the setters only touch NVS and the worker,
  * never LVGL, and tick() redraws from the sweep as usual.
  */
@@ -656,6 +751,23 @@ static bool bench(const char *arg)
                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+        fflush(stdout);
+        return true;
+    }
+    if (!strncmp(arg, "tap=", 4)) {
+        /* The taps a finger makes on the scope, for a board that has none. */
+        const char *what = arg + 4;
+        if (!strcmp(what, "mode")) {
+            on_mode_clicked(NULL);
+        } else if (!strcmp(what, "nm")) {
+            on_pop_nm_clicked(NULL);
+        } else if (!strcmp(what, "city")) {
+            on_pop_city_clicked(NULL);
+        } else {
+            return false;
+        }
+        printf("@radar %d %d nm %s\n", (int)muse_radar_mode(),
+               muse_radar_range_nm(), muse_radar_place_at()->name);
         fflush(stdout);
         return true;
     }

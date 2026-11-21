@@ -25,6 +25,15 @@
 /* Weather: fetch the newest RainViewer frame into the rain layer. */
 bool muse_radar_rain_fetch(void);
 
+/* How much of the scope has rain on it, in tenths of a percent, and the zoom
+ * the picture was cut at. A picture landing is not the same as it having
+ * anything in it. */
+int  muse_radar_rain_permille(void);
+int  muse_radar_rain_zoom(void);
+
+/* Drop the picture: it belongs to the place and zoom it was cut for. */
+void muse_radar_rain_invalidate(void);
+
 /*
  * Ships: AIS arrives as a stream rather than an answer to a question, so the
  * poll keeps the socket up and the snapshot reads off whatever has arrived.
@@ -38,5 +47,6 @@ bool muse_radar_ais_have_key(void);
  * say that rather than looking for contacts that will never arrive. */
 bool muse_radar_ais_linked(void);
 
-/* Drops the nearest-first target list in place. Shared by both sources. */
+/* Adds one contact to the nearest-first list, spreading what it keeps across
+ * the range rings once the list is full. Shared by both sources. */
 void muse_radar_keep(muse_radar_sweep_t *s, const muse_radar_target_t *t);

@@ -56,6 +56,8 @@ static const char *TAG = "radar.rain";
 
 static uint16_t *s_rain;        /* PX*PX RGB565, 0 where it is dry */
 static bool s_fresh;
+static int s_wet;               /* scope pixels with rain in them */
+static int s_zoom;              /* the zoom the current picture was cut at */
 
 const uint16_t *muse_radar_rain(void)
 {
@@ -65,6 +67,35 @@ const uint16_t *muse_radar_rain(void)
 bool muse_radar_rain_fresh(void)
 {
     return s_fresh;
+}
+
+/*
+ * How much of the scope has rain on it, in tenths of a percent. A picture
+ * landing and a picture having anything in it are different questions, and
+ * the card used to answer the first while claiming to answer the second: dry
+ * sky over the whole state still read "RAIN".
+ */
+int muse_radar_rain_permille(void)
+{
+    if (!s_fresh) {
+        return 0;
+    }
+    /* Against the scope's area, not the square the pixels live in. */
+    int area = (int)(3.14159f * (PX / 2) * (PX / 2));
+    return area > 0 ? (int)((long long)s_wet * 1000 / area) : 0;
+}
+
+int muse_radar_rain_zoom(void)
+{
+    return s_zoom;
+}
+
+/* A setting changed: the picture belongs to the place and zoom it was cut
+ * for, so it stops counting as current until the next one lands. */
+void muse_radar_rain_invalidate(void)
+{
+    s_fresh = false;
+    s_wet = 0;
 }
 
 /* --------------------------------------------------------------- fetch */
@@ -264,6 +295,7 @@ static bool blit_tile(const uint8_t *png, size_t len, int tx, int ty, int z,
                 continue;
             }
             s_rain[y * PX + x] = ramp(s);
+            s_wet++;
         }
     }
     free(rgba);
@@ -304,6 +336,8 @@ bool muse_radar_rain_fetch(void)
         return false;
     }
     memset(s_rain, 0, (size_t)PX * PX * 2);
+    s_wet = 0;
+    s_zoom = z;
     int wrap = (int)n;
     int ok = 0;
     for (int j = 0; j < 2; j++) {
@@ -331,7 +365,7 @@ bool muse_radar_rain_fetch(void)
     }
     free(png);
     s_fresh = ok > 0;
-    ESP_LOGI(TAG, "%s: z=%d, %d of 4 tiles, stack left %u",
-             p->name, z, ok, (unsigned)uxTaskGetStackHighWaterMark(NULL));
+    ESP_LOGI(TAG, "%s: z=%d, %d of 4 tiles, %d wet px, stack left %u",
+             p->name, z, ok, s_wet, (unsigned)uxTaskGetStackHighWaterMark(NULL));
     return s_fresh;
 }

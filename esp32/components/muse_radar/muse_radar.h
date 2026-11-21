@@ -80,8 +80,9 @@ typedef struct {
 
 /*
  * The cap exists because New York inside 250 nm is 1,199 aircraft in a 615 KB
- * body. The nearest ones are the interesting ones, so the parser keeps those
- * and counts the rest.
+ * body. Which 80 survive is decided ring by ring rather than by distance
+ * alone -- see muse_radar_keep() -- because keeping the nearest 80 left the
+ * outer two thirds of a 250 NM scope empty on any busy place.
  */
 #define MUSE_RADAR_MAX_TARGETS 80
 

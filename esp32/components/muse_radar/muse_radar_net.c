@@ -97,6 +97,8 @@ int muse_radar_range_index(void)
     return s_range;
 }
 
+static void radar_reset(void);
+
 void muse_radar_set_range_index(int i)
 {
     if (i < 0 || i > MUSE_RADAR_OFF || i == muse_radar_range_index()) {
@@ -104,7 +106,9 @@ void muse_radar_set_range_index(int i)
     }
     s_range = i;
     nvs_put("range", i);
-    muse_radar_refresh();
+    /* Not just a refetch: the old sweep was gathered for the old range, so
+     * every blip in it is at the wrong radius until the new one lands. */
+    radar_reset();
 }
 
 int muse_radar_range_nm(void)
@@ -125,8 +129,6 @@ muse_radar_mode_t muse_radar_mode(void)
     }
     return (muse_radar_mode_t)s_mode;
 }
-
-static void radar_reset(void);
 
 void muse_radar_set_mode(muse_radar_mode_t m)
 {
@@ -213,6 +215,10 @@ static void radar_reset(void)
     portENTER_CRITICAL(&s_lock);
     memset(&s_sweep, 0, sizeof(s_sweep));
     portEXIT_CRITICAL(&s_lock);
+    /* The rain picture was projected for one place at one zoom, and a setting
+     * change invalidates both. Dropping it is what stops the last city's
+     * weather sitting under the new city's rings until the next tile lands. */
+    muse_radar_rain_invalidate();
     s_want = true;
 }
 
@@ -227,20 +233,82 @@ void muse_radar_set_visible(bool visible)
 /* ------------------------------------------------------ parsing a sweep */
 
 /* Keeps the nearest MUSE_RADAR_MAX_TARGETS, in order, as they stream past. */
+/*
+ * Which range ring a contact falls in. Keeping the nearest 80 looked right at
+ * 12 NM and wrong at 250: a busy place has 80 aircraft within 30 miles, so the
+ * cap filled up long before the edge and the outer two thirds of the scope was
+ * always empty. Contacts are spread across the rings instead, each ring
+ * holding a share of the cap and lending what it does not use to the others.
+ *
+ * The range is read here rather than passed in because the worker is the only
+ * caller and is always working at the current range; a range change mid-sweep
+ * costs one badly distributed sweep and nothing else.
+ */
+#define KEEP_RINGS   4
+#define RING_QUOTA   (MUSE_RADAR_MAX_TARGETS / KEEP_RINGS)
+
+static int ring_of(float dst)
+{
+    int range = muse_radar_range_nm();
+    if (range <= 0) {
+        return 0;
+    }
+    int r = (int)(dst / (float)range * KEEP_RINGS);
+    return r < 0 ? 0 : (r >= KEEP_RINGS ? KEEP_RINGS - 1 : r);
+}
+
 void muse_radar_keep(muse_radar_sweep_t *s, const muse_radar_target_t *t)
 {
-    if (s->n == MUSE_RADAR_MAX_TARGETS && t->dst >= s->t[s->n - 1].dst) {
+    if (s->n < MUSE_RADAR_MAX_TARGETS) {
+        int at = s->n;
+        while (at > 0 && s->t[at - 1].dst > t->dst) {
+            s->t[at] = s->t[at - 1];
+            at--;
+        }
+        s->t[at] = *t;
+        s->n++;
         return;
     }
-    int at = s->n < MUSE_RADAR_MAX_TARGETS ? s->n : MUSE_RADAR_MAX_TARGETS - 1;
+
+    /* Full: someone has to go, and it should be whichever ring is most over
+     * its share rather than simply the farthest contact on the scope. */
+    int count[KEEP_RINGS] = { 0 };
+    for (int i = 0; i < s->n; i++) {
+        count[ring_of(s->t[i].dst)]++;
+    }
+    int mine = ring_of(t->dst), fat = 0;
+    for (int r = 1; r < KEEP_RINGS; r++) {
+        if (count[r] > count[fat]) {
+            fat = r;
+        }
+    }
+    if (count[mine] >= RING_QUOTA && count[mine] >= count[fat]) {
+        return;         /* this ring has had its share; leave the list alone */
+    }
+
+    /* Drop the farthest contact of the fattest ring: within a ring the near
+     * ones are the interesting ones, which is the old rule, ring by ring. */
+    int drop = -1;
+    for (int i = s->n - 1; i >= 0; i--) {
+        if (ring_of(s->t[i].dst) == fat) {
+            drop = i;
+            break;
+        }
+    }
+    if (drop < 0) {
+        return;
+    }
+    memmove(&s->t[drop], &s->t[drop + 1],
+            (size_t)(s->n - 1 - drop) * sizeof(s->t[0]));
+    s->n--;
+
+    int at = s->n;
     while (at > 0 && s->t[at - 1].dst > t->dst) {
         s->t[at] = s->t[at - 1];
         at--;
     }
     s->t[at] = *t;
-    if (s->n < MUSE_RADAR_MAX_TARGETS) {
-        s->n++;
-    }
+    s->n++;
 }
 
 static float num(const cJSON *o, const char *key, float dflt)
