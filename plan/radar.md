@@ -684,6 +684,11 @@ where one did and the sky was clear.
   coastline moved with it, `make_places.py` re-run against Natural Earth 50m.
 
   ![Taiwan centred, 250 NM](assets/radar-dev-taiwan.png)
+
+  Weather at the new centre, with the scope middle out on the water and the
+  island filling the right half:
+
+  ![Taiwan weather, 250 NM](assets/radar-dev-taiwan-weather.png)
 - ~~Does the PNG decoder fit?~~ Yes — libpng's simplified reader, not LVGL's,
   decoding 256px tiles one at a time. See "On the board" above for what it
   cost.
@@ -745,6 +750,31 @@ with the tile host.
 The rain band sits on the cloud band it falls out of, and the coastline is
 registered under both — which is the check that matters, since the projection
 was rewritten.
+
+## Every combination, once
+
+Three modes x three places x three ranges, driven over the console and
+captured one at a time, so a mode that only works at one range or one place
+could not hide. All 27 came back with a picture.
+
+![The weather sheet](assets/radar-dev-sheet-weather.png)
+
+What it caught:
+
+- **Planes are thin around Taiwan at 12 and 40 NM.** Not a bug — the feeds are
+  volunteer receivers and there are far fewer of them there, the same ratio
+  the earlier counts showed.
+- **The first weather sweep was wrong and the sheet showed it.** The wait
+  condition matched the *previous* cycle's log line, so several shots were
+  taken mid-fetch — hard rectangular tile edges, and empty scopes at places
+  that had measured 14% and 33% minutes earlier. The driver now waits on
+  place-named stages in order, each matched only in bytes that arrive after
+  the one before it.
+- **Ships report `TIMEOUT` in the driver but the shots are fine.** AIS only
+  logs `subscribed to` when the subscription actually changes, not once per
+  range, so there is nothing to wait on. Same for the cloud pass when it has
+  no new tile to fetch. A log line is a poor completion signal when the code
+  is allowed to skip work.
 
 ## The information icon
 
