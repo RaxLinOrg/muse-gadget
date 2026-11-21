@@ -25,6 +25,7 @@
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "png.h"
@@ -67,6 +68,21 @@ static int s_wet;               /* scope pixels with rain in them */
 static int s_cloud;             /* scope pixels with cloud in them */
 static bool s_cloud_seen;       /* a satellite answered for this place at all */
 static int s_zoom;              /* the zoom the rain pass was cut at */
+/*
+ * Screen pixel to web-mercator tile coordinate, worked out once a pass.
+ *
+ * Measured, this was the whole cost of a weather fetch: 30 s of the ~35 s a
+ * pass took, against 0.3 s to pull the bytes down. The old inner loop ran
+ * merc_y() -- a double-precision sin() and log(), both software on this chip
+ * -- plus two divisions for every one of the ~167,000 pixels inside the
+ * scope, once per tile, four tiles a pass. 1.3 million of them a cycle.
+ *
+ * None of it depended on the tile, and the mapping separates: the column a
+ * screen pixel lands in depends only on its x, the row only on its y. So it
+ * is two arrays of 466 floats, filled once, and the inner loop becomes two
+ * lookups and a subtraction.
+ */
+static float *s_mapx, *s_mapy;  /* in tile units: whole part is the tile */
 
 const uint16_t *muse_radar_rain(void)
 {
@@ -132,20 +148,48 @@ void muse_radar_rain_invalidate(void)
 /* --------------------------------------------------------------- fetch */
 
 /* Blocking GET into buf; returns the length or -1. */
-static int get(const char *url, uint8_t *buf, size_t cap)
+/* Where a fetch's time actually goes, summed over a pass. */
+static int64_t s_t_open, s_t_read, s_t_blit;
+
+/*
+ * The four tiles of a pass come from one host, so they share one client.
+ * Measured, a fresh TLS session costs 3.5 s on this chip and the pass opened
+ * four of them: 14 s of RainViewer's 15 s pass was handshakes.
+ *
+ * Note that keep_alive_enable alone does not help here. Reading IDF's
+ * esp_http_client.c, esp_http_client_close() calls esp_transport_close(), and
+ * esp_http_client_open() sets the state to CONNECTING and then connects
+ * unconditionally; the socket is only held across requests by
+ * esp_http_client_perform(), which this does not use. What does carry over is
+ * the TLS session ticket, which open() looks for and resumes from -- hence
+ * save_client_session here and CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS in
+ * sdkconfig.defaults. The first tile pays the full handshake and the rest
+ * resume.
+ */
+static esp_http_client_handle_t open_client(const char *url)
 {
     esp_http_client_config_t cfg = {
         .url = url,
         .timeout_ms = HTTP_TIMEOUT_MS,
         .crt_bundle_attach = esp_crt_bundle_attach,
-        .keep_alive_enable = false,
+        .keep_alive_enable = true,
+        .save_client_session = true,
         .user_agent = "muse-gadget-radar/1.0 (ESP32; github.com/RaxLinOrg/muse-gadget)",
     };
-    esp_http_client_handle_t c = esp_http_client_init(&cfg);
+    return esp_http_client_init(&cfg);
+}
+
+static int get(esp_http_client_handle_t c, const char *url,
+               uint8_t *buf, size_t cap)
+{
+    int64_t t0 = esp_timer_get_time();
     if (!c) {
         return -1;
     }
     int got = -1;
+    if (esp_http_client_set_url(c, url) != ESP_OK) {
+        return -1;
+    }
     if (esp_http_client_open(c, 0) != ESP_OK) {
         goto done;
     }
@@ -156,6 +200,8 @@ static int get(const char *url, uint8_t *buf, size_t cap)
         ESP_LOGW(TAG, "HTTP %d", esp_http_client_get_status_code(c));
         goto done;
     }
+    int64_t t1 = esp_timer_get_time();
+    s_t_open += t1 - t0;
     size_t len = 0;
     while (len < cap) {
         int n = esp_http_client_read(c, (char *)buf + len, (int)(cap - len));
@@ -168,9 +214,11 @@ static int get(const char *url, uint8_t *buf, size_t cap)
         len += (size_t)n;
     }
     got = (int)len;
+    s_t_read += esp_timer_get_time() - t1;
 done:
+    /* Closed but not destroyed: close() parks the session so the next
+     * set_url + open on the same host reuses it. */
     esp_http_client_close(c);
-    esp_http_client_cleanup(c);
     return got;
 }
 
@@ -182,7 +230,12 @@ static bool latest_path(char *out, size_t cap)
         return false;
     }
     bool ok = false;
-    int n = get("https://api.rainviewer.com/public/weather-maps.json", buf, 2047);
+    const char *url = "https://api.rainviewer.com/public/weather-maps.json";
+    esp_http_client_handle_t c = open_client(url);
+    int n = get(c, url, buf, 2047);
+    if (c) {
+        esp_http_client_cleanup(c);
+    }
     if (n <= 0) {
         goto done;
     }
@@ -333,8 +386,8 @@ static int pick_zoom(double lat, int range_nm)
 }
 
 /* Decode one tile and drop whatever of it lands inside the scope. */
-static bool blit_tile(const uint8_t *png, size_t len, int tx, int ty, int z,
-                      double lat0, double lon0, int range_nm, bool clouds)
+static bool blit_tile(const uint8_t *png, size_t len, int tx, int ty,
+                      bool clouds)
 {
     png_image img;
     memset(&img, 0, sizeof(img));
@@ -358,28 +411,29 @@ static bool blit_tile(const uint8_t *png, size_t len, int tx, int ty, int z,
     }
     int w = (int)img.width, h = (int)img.height;
 
-    double n = pow(2.0, z);
-    double world = (double)w * n;           /* the tile's own pixel size */
-    double ox = (double)tx * w, oy = (double)ty * h;
-    double coslat = cos(lat0 * M_PI / 180.0);
     int ctr = PX / 2, rad = PX / 2 - 2;
 
     for (int y = 0; y < PX; y++) {
+        float fy = (s_mapy[y] - (float)ty) * (float)h;
+        if (fy < 0.0f || fy >= (float)h) {
+            continue;           /* this row belongs to another tile */
+        }
+        int py = (int)fy;
+        int dy = y - ctr;
+        int span = rad * rad - dy * dy;
+        if (span < 0) {
+            continue;
+        }
         for (int x = 0; x < PX; x++) {
-            int dx = x - ctr, dy = y - ctr;
-            if (dx * dx + dy * dy > rad * rad) {
+            int dx = x - ctr;
+            if (dx * dx > span) {
                 continue;
             }
-            double nx = (double)dx / rad * range_nm;
-            double ny = -(double)dy / rad * range_nm;
-            double lat = lat0 + ny / 60.0;
-            double lon = lon0 + nx / (60.0 * coslat);
-            double px_x = (lon + 180.0) / 360.0 * world - ox;
-            double px_y = merc_y(lat) * world - oy;
-            if (px_x < 0 || px_x >= w || px_y < 0 || px_y >= h) {
+            float fx = (s_mapx[x] - (float)tx) * (float)w;
+            if (fx < 0.0f || fx >= (float)w) {
                 continue;       /* belongs to one of the other three tiles */
             }
-            const uint8_t *q = rgba + (((size_t)(int)px_y) * w + (int)px_x) * 4;
+            const uint8_t *q = rgba + ((size_t)py * w + (int)fx) * 4;
             int a = q[3];
             if (a < 30) {
                 continue;
@@ -446,6 +500,25 @@ static bool fetch_layer(bool clouds, bool keep)
         z = CLOUD_ZOOM_MAX;     /* GoogleMapsCompatible_Level6 stops here */
     }
     double n = pow(2.0, z);
+    if (!s_mapx) {
+        s_mapx = heap_caps_malloc(PX * sizeof(float), MALLOC_CAP_SPIRAM);
+        s_mapy = heap_caps_malloc(PX * sizeof(float), MALLOC_CAP_SPIRAM);
+        if (!s_mapx || !s_mapy) {
+            ESP_LOGE(TAG, "no room for the projection table");
+            return false;
+        }
+    }
+    {
+        int ctr = PX / 2, rad = PX / 2 - 2;
+        double coslat = cos(p->lat * M_PI / 180.0);
+        for (int i = 0; i < PX; i++) {
+            double d = (double)(i - ctr) / rad * range;
+            double lon = p->lon + d / (60.0 * coslat);
+            double lat = p->lat - d / 60.0;     /* screen y runs south */
+            s_mapx[i] = (float)((lon + 180.0) / 360.0 * n);
+            s_mapy[i] = (float)(merc_y(lat) * n);
+        }
+    }
     double fx = ((double)p->lon + 180.0) / 360.0 * n;
     double fy = merc_y(p->lat) * n;
     int cx = (int)floor(fx), cy = (int)floor(fy);
@@ -457,6 +530,8 @@ static bool fetch_layer(bool clouds, bool keep)
     if (!png) {
         return false;
     }
+    /* Opened on the first tile's URL and kept for the other three. */
+    esp_http_client_handle_t http = NULL;
     if (!keep) {
         memset(s_rain, 0, (size_t)PX * PX * 2);
     }
@@ -466,6 +541,7 @@ static bool fetch_layer(bool clouds, bool keep)
         s_wet = 0;
         s_zoom = z;
     }
+    s_t_open = s_t_read = s_t_blit = 0;
     if (clouds) {
         /* Freed before this call returns; 217 KB of PSRAM for the time it
          * takes to decide where the cloud starts. */
@@ -496,19 +572,29 @@ static bool fetch_layer(bool clouds, bool keep)
                          "https://tilecache.rainviewer.com%s/%d/%d/%d/%d/4/1_1.png",
                          path, TILE_PX, z, tx, ty);
             }
-            int len = get(url, png, PNG_MAX);
+            if (!http) {
+                http = open_client(url);
+            }
+            int64_t tb = esp_timer_get_time();
+            int len = get(http, url, png, PNG_MAX);
+            tb = esp_timer_get_time() - tb;
             /*
              * An empty tile is a few hundred bytes and decodes to nothing,
              * which is the right answer for dry sky; only a failed request is
              * worth counting against us.
              */
-            if (len > 0 && blit_tile(png, (size_t)len, tx, ty, z,
-                                     p->lat, p->lon, range, clouds)) {
+            int64_t td = esp_timer_get_time();
+            if (len > 0 && blit_tile(png, (size_t)len, tx, ty, clouds)) {
                 ok++;
             }
+            s_t_blit += esp_timer_get_time() - td;
+            (void)tb;
         }
     }
     free(png);
+    if (http) {
+        esp_http_client_cleanup(http);
+    }
     if (clouds && s_grey) {
         /* The floor is the median of what is actually on the scope, plus a
          * margin; everything above it is the cold tail. */
@@ -553,6 +639,9 @@ static bool fetch_layer(bool clouds, bool keep)
              p->name, clouds ? "clouds" : "rain", z, ok,
              clouds ? s_cloud : s_wet,
              (unsigned)uxTaskGetStackHighWaterMark(NULL));
+    ESP_LOGI(TAG, "%s %s timing: connect %lld ms, body %lld ms, decode %lld ms",
+             p->name, clouds ? "clouds" : "rain",
+             s_t_open / 1000, s_t_read / 1000, s_t_blit / 1000);
     return ok > 0;
 }
 

@@ -284,6 +284,30 @@ static void draw_mode_icon(void)
 #undef KI
 }
 
+/*
+ * The information icon, rasterised rather than set as a label. As an LVGL
+ * label it was an "i" from the font sitting in a black circle, and the two
+ * were never concentric: a label puts its text on the baseline inside the
+ * box, while the circle is the box, so the glyph rode high and left of the
+ * centre no matter what the text alignment said. Drawing the disc and the
+ * glyph from the same centre is the whole fix, and it buys the ring and the
+ * weight that make it read as a button besides. The tap is taken by an
+ * invisible box over it, the way the mode glyph's is.
+ */
+static void draw_info_icon(void)
+{
+    int cx = CTR + INFO_X, cy = CTR + INFO_Y, r = INFO_PX / 2;
+    disc(cx, cy, r - 2, C_BG);
+    ring(cx, cy, r - 2, C_MID);
+    ring(cx, cy, r - 3, C_MID);
+    /* The dot and the stem, both centred on cx, together spanning the same
+     * distance above and below cy. */
+    disc(cx, cy - 9, 2, C_MID);
+    for (int x = cx - 2; x <= cx + 2; x++) {
+        line(x, cy - 3, x, cy + 10, C_MID);
+    }
+}
+
 static void draw_scope(const muse_radar_sweep_t *s)
 {
     float range = (float)muse_radar_range_nm();
@@ -350,6 +374,7 @@ static void draw_scope(const muse_radar_sweep_t *s)
     ring(CTR, CTR, 7, C_MID);
     disc(CTR, CTR, 2, C_MID);
     draw_mode_icon();
+    draw_info_icon();
 
     lv_obj_invalidate(s_img);
 }
@@ -447,14 +472,11 @@ static void build(lv_obj_t *tile)
 
     /* No title and no permanent card: the scope is the page. Everything a
      * caption used to say is one tap away and gone again in five seconds. */
-    s_info = label(tile, &lv_font_montserrat_28, TEXT_MID, LV_ALIGN_CENTER,
-                   INFO_X, INFO_Y);
+    s_info = lv_obj_create(tile);
+    lv_obj_remove_style_all(s_info);
     lv_obj_set_size(s_info, INFO_PX, INFO_PX);
-    lv_obj_set_style_bg_color(s_info, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(s_info, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(s_info, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_text_align(s_info, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(s_info, "i");
+    lv_obj_align(s_info, LV_ALIGN_CENTER, INFO_X, INFO_Y);
+    lv_obj_clear_flag(s_info, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_info, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(s_info, 12);
     lv_obj_add_event_cb(s_info, on_info_clicked, LV_EVENT_CLICKED, NULL);

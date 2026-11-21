@@ -549,6 +549,7 @@ static bool fetch_planes(muse_radar_sweep_t *s)
         return false;
     }
     bool ok = false;
+    int64_t t0 = esp_timer_get_time();
     if (esp_http_client_open(c, 0) != ESP_OK) {
         ESP_LOGW(TAG, "connect failed");
         goto done;
@@ -564,7 +565,10 @@ static bool fetch_planes(muse_radar_sweep_t *s)
                  status == 429 ? " -- out of requests for today" : "");
         goto done;
     }
+    int64_t t1 = esp_timer_get_time();
     ok = stream_objects(c, s);
+    ESP_LOGI(TAG, "planes timing: connect %lld ms, body+parse %lld ms",
+             (t1 - t0) / 1000, (esp_timer_get_time() - t1) / 1000);
 done:
     esp_http_client_close(c);
     esp_http_client_cleanup(c);

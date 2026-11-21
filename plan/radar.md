@@ -675,11 +675,13 @@ where one did and the sky was clear.
 - Which place is the default? Shipped as Bay Area, Planes, 40 NM — the one
   that looks alive out of the box.
 - **The Taiwan entry is the island, not the strait.** It was 24.5N 119.5E,
-  which put the scope's centre in open water with Taiwan off to one side; it
-  is now 23.7N 121.0E, the middle of the island, so the island is what the
-  scope is pointed at and the mainland coast and the Ryukyus sit inside the
-  250 NM ring. The baked coastline moved with it — `make_places.py` re-run
-  against Natural Earth 50m, 14 runs and 308 points for that place.
+  open water with Taiwan off to one side. Centring on the island itself
+  (23.7N 121.0E) pointed the scope at the right place but put the middle of
+  the scope on the Central Mountain Range: at 12 and 40 NM both planes and
+  ships came back empty, because the near rings were all land. It now sits
+  at **24.2N 120.4E, offshore of Taichung** — the island still fills the
+  scope, and the 40 NM ring takes in the strait's shipping lane. The baked
+  coastline moved with it, `make_places.py` re-run against Natural Earth 50m.
 
   ![Taiwan centred, 250 NM](assets/radar-dev-taiwan.png)
 - ~~Does the PNG decoder fit?~~ Yes — libpng's simplified reader, not LVGL's,
@@ -688,6 +690,75 @@ where one did and the sky was clear.
 - Should the device recolour the tile, or is RainViewer's own palette good
   enough? It has to decode the pixels either way, so recolouring to match the
   rest of the page is nearly free — the mockup above does it.
+
+## What a refresh actually costs
+
+The page felt slow in every mode, so it was measured rather than guessed at,
+by timing three phases separately: opening the connection, pulling the body
+down, and decoding it into the scope.
+
+| | connect | body | decode |
+|---|---|---|---|
+| Clouds pass | 2.8–4.1 s | 0.3 s | **21–31 s** |
+| Rain pass | 13.8–14.7 s | ~0 s | **27–30 s** |
+| Planes | 3.3–4.1 s | 0.002–1.7 s | — |
+
+Neither number was where the guess had put it. The network was never the
+problem: a weather pass moved about 400 KB in a third of a second.
+
+**Decode was 30 s because of a double-precision sin() inside the pixel loop.**
+`blit_tile()` turned each screen pixel into a latitude and longitude and then
+called `merc_y()` — a `sin()` and a `log()`, both software-emulated on this
+chip — plus two divisions, for every one of the ~167,000 pixels inside the
+scope. Four tiles a pass, two passes a cycle: 1.3 million of them.
+
+None of it depended on which tile was being drawn, and the mapping separates:
+the tile column a screen pixel lands in depends only on its x, the row only on
+its y. So it became two arrays of 466 floats, filled once a pass, and the
+inner loop became two lookups and a subtraction.
+
+**Connect was 14 s because each tile opened its own TLS session.** Four tiles,
+four full handshakes at ~3.5 s each, to one host. `keep_alive_enable` does not
+fix this: reading IDF's `esp_http_client.c`, `esp_http_client_close()` calls
+`esp_transport_close()`, and `esp_http_client_open()` sets the state to
+CONNECTING and then connects unconditionally — the socket is only held across
+requests by `esp_http_client_perform()`, which this code does not use. What
+does carry over is the **TLS session ticket**, which `open()` looks for and
+resumes from. That needs `CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS=y` (RFC 5077;
+`MBEDTLS_CLIENT_SSL_SESSION_TICKETS` was already on) and `save_client_session`
+on the client config. The first tile pays the handshake and the rest resume.
+
+Measured again on the board, same place and range:
+
+| | before | after |
+|---|---|---|
+| Clouds pass | ~35 s | **2.2 s** |
+| Rain pass | ~43 s | **6.6 s** |
+| Weather cycle | ~78 s | **~9 s** |
+
+Rain's connect is still 6 s against clouds' 1.5 s, because the RainViewer pass
+also fetches the frame index from a second host, which cannot share a ticket
+with the tile host.
+
+![Japan at 250 NM after the speedup](assets/radar-dev-weather-japan-fast.png)
+
+The rain band sits on the cloud band it falls out of, and the coastline is
+registered under both — which is the check that matters, since the projection
+was rewritten.
+
+## The information icon
+
+It was an "i" in a black circle and the two were never concentric. The cause
+was not an alignment setting: the circle *was* the label's background box, and
+a label puts its text on the baseline inside that box, so the glyph rode high
+and left however `text_align` was set.
+
+It is now rasterised into the scope like the mode glyph — disc, ring, dot and
+stem all measured from one centre — with an invisible box over it taking the
+tap. LVGL's symbol font has no information or question-mark glyph, so the
+circled *i* stays; it was drawn wrong, not chosen wrong.
+
+![The info icon](assets/radar-dev-info-icon.png)
 
 ## References
 
