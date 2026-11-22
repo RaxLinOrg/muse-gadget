@@ -64,7 +64,9 @@ if(CONFIG_MUSE_ENABLED)
         # one font cannot carry more than 1 MB of glyphs and all of Big5 at
         # 4 bpp is 1.05 MB. muse_ui.c chains the second behind the first.
         list(APPEND srcs "fonts/muse_font_cjk_tc_16.c")     # captions' CJK fallback
-        list(APPEND srcs "fonts/muse_font_cjk_tc2_16.c")    # ... and Big5 level 2
+        if(CONFIG_MUSE_CJK_FONT_NOTO_TC_L2)
+            list(APPEND srcs "fonts/muse_font_cjk_tc2_16.c")  # ... and Big5 level 2
+        endif()
     elseif(CONFIG_MUSE_CJK_FONT_NOTO)
         list(APPEND srcs "fonts/muse_font_cjk_noto_16.c")
     elseif(CONFIG_MUSE_CJK_FONT)

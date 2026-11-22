@@ -597,7 +597,9 @@ static const lv_font_t *font_pick(const lv_font_t *full, const lv_font_t *compac
 
 #if CONFIG_MUSE_CJK_FONT_NOTO_TC
 LV_FONT_DECLARE(muse_font_cjk_tc_16)
+#if CONFIG_MUSE_CJK_FONT_NOTO_TC_L2
 LV_FONT_DECLARE(muse_font_cjk_tc2_16)
+#endif
 #elif CONFIG_MUSE_CJK_FONT_NOTO
 LV_FONT_DECLARE(muse_font_cjk_noto_16)
 #elif CONFIG_MUSE_CJK_FONT
@@ -612,16 +614,23 @@ LV_FONT_DECLARE(muse_font_cjk_16)
  * Level 1 is the font; level 2 hangs off its fallback, which costs nothing to
  * draw and nothing to lay out -- the line box comes from the primary font and
  * a fallback glyph is placed by its own offset against the same baseline.
+ * MUSE_CJK_FONT_NOTO_TC_L2=n drops level 2 and its 524 KB.
  */
 static const lv_font_t *cjk_font(void)
 {
 #if CONFIG_MUSE_CJK_FONT_NOTO_TC
+#if CONFIG_MUSE_CJK_FONT_NOTO_TC_L2
     static lv_font_t font;
     if (!font.get_glyph_dsc) {
         font = muse_font_cjk_tc_16;
         font.fallback = &muse_font_cjk_tc2_16;
     }
     return &font;
+#else
+    /* Level 1 alone. A level 2 character draws as a box, which is what LVGL
+     * does for anything it has no glyph for, so nothing downstream changes. */
+    return &muse_font_cjk_tc_16;
+#endif
 #elif CONFIG_MUSE_CJK_FONT_NOTO
     return &muse_font_cjk_noto_16;
 #else
